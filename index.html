@@ -1,0 +1,1547 @@
+<!DOCTYPE html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Lyric Speaker</title>
+    <style>
+      *,
+      *::before,
+      *::after { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body { width: 100%; height: 100%; overflow: hidden; background: #ffffff; }
+      #three-canvas { display: block; width: 100vw; height: 100vh; }
+
+      #ui-overlay { position: fixed; inset: 0; pointer-events: none; z-index: 10;
+        font-family: "Helvetica Neue", Arial, sans-serif; }
+
+      #song-info { position: absolute; top: 34px; left: 44px; opacity: 0; transition: opacity 0.8s ease, color 0.6s ease; }
+      #song-info.visible { opacity: 1; }
+      #song-title { font-size: 12px; font-weight: 700; letter-spacing: 0.2em; text-transform: uppercase; }
+      #song-artist { font-size: 10px; font-weight: 400; letter-spacing: 0.14em; margin-top: 5px; opacity: 0.6; }
+
+      #status-bar { position: absolute; bottom: 30px; right: 44px; font-size: 9px;
+        letter-spacing: 0.22em; text-transform: uppercase; opacity: 0.5; transition: color 0.6s ease; }
+
+      #start-prompt { position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; pointer-events: none; transition: opacity 1.2s ease; }
+      #start-prompt.hidden { opacity: 0; }
+      #start-prompt h1 { font-size: 20px; font-weight: 300; letter-spacing: 0.42em;
+        text-transform: uppercase; margin-bottom: 26px; }
+      #start-prompt p { font-size: 11px; letter-spacing: 0.18em; line-height: 2; text-align: center;
+        max-width: 480px; opacity: 0.55; }
+
+      #progress-bar-wrap { position: absolute; bottom: 0; left: 0; width: 100%; height: 2px;
+        background: rgba(128,128,128,0.18); pointer-events: none; }
+      #progress-bar-fill { height: 100%; width: 0%; transition: width 0.25s linear; }
+
+      #error-toast { position: absolute; bottom: 56px; left: 50%; transform: translateX(-50%);
+        background: rgba(0,0,0,0.82); color: #fff; font-size: 11px; letter-spacing: 0.1em;
+        padding: 9px 22px; border-radius: 2px; opacity: 0; pointer-events: none;
+        transition: opacity 0.4s ease; white-space: nowrap; }
+      #error-toast.visible { opacity: 1; }
+
+      @keyframes pulse { 0%,100% { opacity: 0.35; } 50% { opacity: 0.7; } }
+      .searching { animation: pulse 2.4s infinite ease-in-out; }
+    </style>
+
+    <script type="importmap">
+      { "imports": { "three": "/node_modules/three/build/three.module.js" } }
+    </script>
+  </head>
+
+  <body>
+    <canvas id="three-canvas"></canvas>
+
+    <div id="ui-overlay">
+      <div id="song-info">
+        <div id="song-title">—</div>
+        <div id="song-artist">—</div>
+      </div>
+      <div id="start-prompt">
+        <h1>Lyric Speaker</h1>
+        <p id="prompt-desc" class="searching">
+          Listening for music…<br />
+          Play a track in Spotify, Apple Music, or any browser on this PC.
+        </p>
+      </div>
+      <div id="status-bar">Listening</div>
+      <div id="progress-bar-wrap"><div id="progress-bar-fill"></div></div>
+      <div id="error-toast"></div>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.min.js"></script>
+
+    <script type="module">
+      "use strict";
+      import * as THREE from "three";
+      import { sampleMood, moodToMotion, lyricTheme, classifyTheme, classifyVibe } from "/mood-engine.js";
+
+      /* ── § 1  DOM ─────────────────────────────────────────────────────── */
+      const canvas = document.getElementById("three-canvas");
+      const startPrompt = document.getElementById("start-prompt");
+      const promptDesc = document.getElementById("prompt-desc");
+      const statusBar = document.getElementById("status-bar");
+      const songInfo = document.getElementById("song-info");
+      const songTitleEl = document.getElementById("song-title");
+      const songArtistEl = document.getElementById("song-artist");
+      const progressFill = document.getElementById("progress-bar-fill");
+      const errorToast = document.getElementById("error-toast");
+
+      /* ── § 2  CONSTANTS ──────────────────────────────────────────────── */
+      // Mood-themed type families (static TTFs opentype.js can parse).
+      const F = {
+        montLight: "https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/Montserrat_300Light.ttf",
+        montBold: "https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/Montserrat_700Bold.ttf",
+        montBlack: "https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/Montserrat_900Black.ttf",
+        cormLight: "https://cdn.jsdelivr.net/npm/@expo-google-fonts/cormorant/Cormorant_300Light.ttf",
+        cormBold: "https://cdn.jsdelivr.net/npm/@expo-google-fonts/cormorant/Cormorant_600SemiBold.ttf",
+        // CJK fallback (single weight, ~8.6 MB) — lazy-loaded only if Japanese appears.
+        cjk: "https://fonts.gstatic.com/s/shipporimincho/v15/VdGGAZweH5EbgHY6YExcZfDoj0BA2_-C7LoS7g.ttf",
+      };
+      // Vibe profile -> { light, heavy } font URLs (A calm serif … D heavy sans).
+      // C & D are BOLD globally (even non-active words) per the heavy-panel look.
+      const PROFILE_FONTS = {
+        A: { light: F.cormLight, heavy: F.cormBold },  // Melancholy/Calm — elegant serif
+        B: { light: F.montLight, heavy: F.montBlack }, // Chill/Groovy — semibold sans
+        C: { light: F.montBold, heavy: F.montBlack },  // High-energy — bold → black
+        D: { light: F.montBold, heavy: F.montBlack },  // Aggressive — bold → heaviest
+      };
+
+      // ── DUAL-LAYER TEXT (base character + offset shadow/tint duplicate) ────
+      const FRONT_Z = 0.18;      // front-text plane (parallax foreground)
+      const SHADOW_DX = 0.05;    // TIGHT drop-shadow offset — reads as depth, never a twin
+      const SHADOW_DY = -0.06;
+      const SHADOW_DZ = -0.22;   // kept close so a 3D tilt can't split it off the glyph
+      const FRONT_ALPHA = 0.85;  // translucent acrylic sheen (dark cutout on white)
+      const SHADOW_ALPHA = 0.3;  // subordinate drop shadow
+
+      const CHAR_SIZE = 1.15; // base em-size (world units)
+      const CURVE_SEGS = 4;
+      const SEEK_JUMP_SEC = 0.4;
+      const DIM_OPACITY = 0.4;
+      const FUTURE_OPACITY = 0; // un-sung words are FULLY hidden (mesh.visible=false) until reached — no pale ghost stack
+      const POP_SCALE = 1.5; // "The Pop" multiplier
+      const SPRING_K = 220; // Hooke stiffness (dt-based)
+      const SPRING_DAMP = 17; // spring damping
+      const SLIDE_K = 13; // position-lerp rate (1/s)
+      const ROT_K = 12; // rotation-lerp rate
+      const OPAC_K = 9; // opacity-lerp rate
+      const ENTRANCE_STAGGER = 0.045; // s between word entrances
+      const CHAR_STAGGER = 0.028; // s between consecutive letters flying in (used by §9 + §10)
+      const REVEAL_RAMP = 0.05; // s — per-letter fade-in ramp for the left→right typewriter reveal
+      const EXIT_DRIFT_Z = 2.4; // exit Z-drift (units/s)
+      const FRUSTUM_MARGIN = 0.86; // safe-zone fraction of the visible plane
+      const CJK_RE = /[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]/;
+      const NETEASE_API_BASE = ""; // optional NetEase proxy base (see README); "" disables
+
+      // ── PHASE GATE ───────────────────────────────────────────────────────
+      // Phase 1 (false): lyrics render FLAT & STATIONARY at the origin — no
+      // camera drift, no spring "pop", no slide/spin entrance, no weight-shift,
+      // no B/W inversion, no point-cloud motion. This is the clean transparent-
+      // panel baseline for verifying audio routing + the single-trigger lock.
+      // Flip to true to re-activate the complete Phase 2 Cotodama kinetic suite
+      // (all of it lives in applyKineticTransforms() + the camera/bg blocks).
+      const ANIMATIONS_ACTIVE = true;
+
+      /* ── § 3  SCENE / CAMERA / RENDERER ──────────────────────────────── */
+      const renderer = new THREE.WebGLRenderer({
+        canvas, antialias: true, alpha: false, powerPreference: "high-performance",
+      });
+      renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+      renderer.setSize(window.innerWidth, window.innerHeight);
+
+      const scene = new THREE.Scene();
+      const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 500);
+      const CAM_Z = 14;
+      camera.position.set(0, 0, CAM_Z);
+      camera.lookAt(0, 0, 0);
+      // Lit setup so extruded glyph faces + bevels shade under kinetic motion.
+      scene.add(new THREE.AmbientLight(0xffffff, 0.72));
+      const keyLight = new THREE.DirectionalLight(0xffffff, 0.7);
+      keyLight.position.set(0.4, 0.9, 1.4);
+      scene.add(keyLight);
+
+      // Black/white inversion state: bgLevel 0 = white bg/dark ink, 1 = black bg/light ink.
+      let bgLevel = 0;
+      let bgTarget = 0;
+      scene.background = new THREE.Color(0xffffff);
+      function inkColorAt(level) {
+        // dark ink on light bg, light ink on dark bg.
+        const v = level < 0.5 ? 0.1 : 0.95;
+        return new THREE.Color(v, v, v);
+      }
+      function applyBg() {
+        // STRICT WHITE BACKGROUND at all times, across every profile — never
+        // changes or dims, even during intense transitions, for maximum contrast.
+        renderer.setClearColor(0xffffff, 1);
+        scene.background.setRGB(1, 1, 1);
+        const uiInk = "#1a1a1a";
+        songInfo.style.color = uiInk;
+        statusBar.style.color = uiInk;
+        startPrompt.style.color = uiInk;
+        progressFill.style.background = uiInk;
+      }
+
+      // ── GLOBAL ACRYLIC TINT (invert-aware, reused every frame) ────────────
+      // Front = deep saturated charcoal-blue ink (or inverted near-white on a
+      // dark panel); shadow = near-black tint duplicate. Both flip cleanly with
+      // bgLevel so Profile D's rapid inversions never break the depth illusion.
+      // Background is always white, so the ink tint is CONSTANT — a deeply
+      // saturated charcoal-blue face with a near-black cast-shadow duplicate.
+      // Max contrast, every profile; no inversion.
+      const _front = new THREE.Color(0.06, 0.09, 0.17);
+      const _shadow = new THREE.Color(0.0, 0.012, 0.05);
+      function computeTints() { /* constant tints — nothing to recompute on white */ }
+      applyBg();
+
+      /* ── § 4  FRUSTUM BOUNDS + RESIZE REFLEX ─────────────────────────── */
+      let halfW = 8, halfH = 5; // visible half-extents at z=0 (recomputed)
+      function computeFrustum() {
+        const vFOV = THREE.MathUtils.degToRad(camera.fov);
+        const h = 2 * Math.tan(vFOV / 2) * CAM_Z;
+        const w = h * camera.aspect;
+        halfH = (h / 2) * FRUSTUM_MARGIN;
+        halfW = (w / 2) * FRUSTUM_MARGIN;
+      }
+      computeFrustum();
+
+      window.addEventListener("resize", () => {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        computeFrustum();
+        // Resize reflex: reflow the current line to the new bounds (words glide).
+        if (activeLine && activeLine.phrase) relayoutActiveLine();
+      });
+
+      /* ── § 5  FONTS (themed weights + lazy CJK) ──────────────────────── */
+      const fontCache = new Map(); // url -> opentype.Font
+      const fontPending = new Map(); // url -> Promise
+      let fontsReady = false;
+
+      function loadFont(url) {
+        if (fontCache.has(url)) return Promise.resolve(fontCache.get(url));
+        if (fontPending.has(url)) return fontPending.get(url);
+        const p = new Promise((resolve, reject) => {
+          opentype.load(url, (err, font) => (err ? reject(err) : resolve(font)));
+        }).then((f) => {
+          fontCache.set(url, f);
+          fontPending.delete(url);
+          return f;
+        });
+        fontPending.set(url, p);
+        return p;
+      }
+
+      function isCJK(text) {
+        return CJK_RE.test(text || "");
+      }
+
+      // SINGLE shared HEAVY-BOLD weight for ALL characters and ALL profiles
+      // (no per-word weight swapping). Japanese falls back to the lazy CJK face.
+      function fontFor(text) {
+        if (isCJK(text)) {
+          const cjk = fontCache.get(F.cjk);
+          if (cjk) return cjk;
+          loadFont(F.cjk).catch(() => {}); // lazy; fall through to Latin meanwhile
+        }
+        return (
+          fontCache.get(F.montBlack) || // heaviest 900 weight — unified across all lyrics
+          fontCache.get(F.montBold) ||
+          fontCache.get(F.montLight) ||
+          null
+        );
+      }
+
+      /* ── § 6  GLYPH → FLAT ShapeGeometry PIPELINE ────────────────────────
+       * opentype glyph outline -> THREE.Shape(s) with holes nested by geometric
+       * containment (winding-agnostic) -> FLAT ShapeGeometry (no extruded side
+       * faces, so a 3D tilt never catches edge slivers). The flat glyphs are
+       * still positioned/rotated freely on X/Y/Z and z-separated for parallax. */
+      function glyphAdvance(font, glyph, emSize) {
+        return ((glyph.advanceWidth || 0) / font.unitsPerEm) * emSize;
+      }
+      function kernBetween(font, a, b, emSize) {
+        return (font.getKerningValue(a, b) / font.unitsPerEm) * emSize;
+      }
+      // One glyph -> array of THREE.Shape (with holes resolved), Y-up, at xOffset.
+      // We feed opentype's TTF outline into a THREE.ShapePath and let toShapes()
+      // nest the holes via proper winding (sampled along the real curves). This is
+      // exactly how three's Font.generateShapes() works — robust for EVERY glyph,
+      // so inner counters (o, a, b, e) stay open and no letter morphs (t -> l).
+      function glyphToShapes(glyph, xOffset, emSize) {
+        const cmds = glyph.getPath(xOffset, 0, emSize).commands;
+        const sp = new THREE.ShapePath();
+        for (const c of cmds) {
+          if (c.type === "M") sp.moveTo(c.x, -c.y);
+          else if (c.type === "L") sp.lineTo(c.x, -c.y);
+          else if (c.type === "Q") sp.quadraticCurveTo(c.x1, -c.y1, c.x, -c.y);
+          else if (c.type === "C") sp.bezierCurveTo(c.x1, -c.y1, c.x2, -c.y2, c.x, -c.y);
+          // "Z" closes the current sub-path; the next "M" opens a fresh one.
+        }
+        // After the Y-negation the OUTER contours read clockwise, so the solids
+        // are CW -> isCCW = false. (true collapses 'o'/'d'/'p' to filled dots by
+        // treating the inner counter as the solid and dropping the outer ring.)
+        return sp.toShapes(false);
+      }
+      // Build DUAL-LAYER glyphs into `group`: per character, ONE flat ShapeGeometry
+      // is shared by a FRONT mesh (parallax foreground, z=FRONT_Z) and an offset
+      // SHADOW/TINT duplicate (z=SHADOW_DZ, +dx/dy) — the deep cast tint behind
+      // each letter. Flat MeshBasicMaterial (tinted per-frame) keeps it cheap and
+      // matches the printed-acrylic look. Returns { front, shadow, geo, baseX }.
+      function buildGlyphsInto(group, text, font, emSize, tracking) {
+        const chars = [];
+        const glyphs = font.stringToGlyphs(text || "");
+        let penX = 0;
+        for (let i = 0; i < glyphs.length; i++) {
+          const g = glyphs[i];
+          const shapes = glyphToShapes(g, 0, emSize); // build at the glyph's own origin
+          if (shapes.length) {
+            // FLAT glyph — ShapeGeometry has NO extruded side faces, so a 3D tilt
+            // never catches edge slivers. DoubleSide keeps it visible when the
+            // phrase angles away from the camera. Front + shadow share one geometry
+            // and stay z-separated (FRONT_Z vs SHADOW_DZ) for the parallax depth.
+            const geo = new THREE.ShapeGeometry(shapes, CURVE_SEGS);
+            const sMat = new THREE.MeshBasicMaterial({ color: _shadow.clone(), transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+            const shadow = new THREE.Mesh(geo, sMat);
+            shadow.position.set(penX + SHADOW_DX, SHADOW_DY, SHADOW_DZ);
+            const fMat = new THREE.MeshBasicMaterial({ color: _front.clone(), transparent: true, opacity: 0, depthWrite: false, side: THREE.DoubleSide });
+            const front = new THREE.Mesh(geo, fMat);
+            front.position.set(penX, 0, FRONT_Z);
+            group.add(shadow);
+            group.add(front);
+            chars.push({ front, shadow, geo, baseX: penX });
+          }
+          // Tracking + kerning apply only BETWEEN glyphs — never a trailing unit
+          // after the last glyph, or the word's width overshoots and glued
+          // syllables (leadGap 0) split apart into a sliver gap ("vi sions").
+          const isLast = i === glyphs.length - 1;
+          const adv = glyphAdvance(font, g, emSize) + (isLast ? 0 : tracking);
+          const kern = !isLast ? kernBetween(font, g, glyphs[i + 1], emSize) : 0;
+          penX += adv + kern;
+        }
+        return { chars, width: penX };
+      }
+      function measureWord(text, font, emSize, tracking) {
+        const glyphs = font.stringToGlyphs(text || "");
+        let w = 0;
+        for (let i = 0; i < glyphs.length; i++) {
+          w += glyphAdvance(font, glyphs[i], emSize);
+          // Match buildGlyphsInto: tracking + kerning only BETWEEN glyphs, never
+          // a trailing unit (keeps measured width == built width, and glued
+          // syllables flush). A mismatch here desyncs layout from render.
+          if (i < glyphs.length - 1) w += tracking + kernBetween(font, glyphs[i], glyphs[i + 1], emSize);
+        }
+        return w;
+      }
+
+      /* ── § 7  LINE / WORD POOL + FOOLPROOF CANVAS CLEAR ──────────────────
+       * Only ONE phrase is ever on screen. `activeLyricMeshes` is the explicit
+       * tracking array of EVERY mesh currently drawn (front faces + shadow/tint
+       * duplicates). clearCanvasLyrics() removes + GPU-disposes all of them in one
+       * pass — called BEFORE building a new phrase, so old text can never linger
+       * or stack underneath (there is no fade-out pipeline that could overlap). */
+      let activeLine = null; // { group, words:[wordObj], phrase, profile, ... }
+      const activeLyricMeshes = []; // [{ front, shadow, geo }] — all visible meshes
+
+      function disposeWordMeshes(wd) {
+        if (wd.chars) {
+          for (const c of wd.chars) {
+            if (c.front) { wd.group.remove(c.front); c.front.material.dispose(); }
+            if (c.shadow) { wd.group.remove(c.shadow); c.shadow.material.dispose(); }
+            if (c.geo) c.geo.dispose(); // shared front/shadow geometry — dispose once
+          }
+        }
+        wd.chars = [];
+      }
+
+      // Rebuild the flat mesh index from the authoritative word/char tree. Called
+      // after a line is built and after any weight swap (which replaces meshes),
+      // so the tracking array always reflects exactly what is on screen.
+      function rebuildMeshIndex() {
+        activeLyricMeshes.length = 0;
+        if (!activeLine) return;
+        for (const wd of activeLine.words) {
+          if (!wd.chars) continue;
+          for (const c of wd.chars) activeLyricMeshes.push(c);
+        }
+      }
+
+      // FOOLPROOF CLEAR — remove every tracked mesh from the scene graph and free
+      // its GPU geometry + material, then drop the line group and empty the array.
+      function clearCanvasLyrics() {
+        for (const c of activeLyricMeshes) {
+          if (c.front) { if (c.front.parent) c.front.parent.remove(c.front); c.front.material.dispose(); }
+          if (c.shadow) { if (c.shadow.parent) c.shadow.parent.remove(c.shadow); c.shadow.material.dispose(); }
+          if (c.geo) c.geo.dispose();
+        }
+        activeLyricMeshes.length = 0;
+        if (activeLine) { scene.remove(activeLine.group); activeLine = null; }
+      }
+      const retireActiveLine = clearCanvasLyrics; // seek / no-phrase / track-change
+
+      /* ── § 8  LAYOUT PROFILES (frustum-aware) ────────────────────────────
+       * Each assigns every word a target { x, y } (left edge), baseScale, rot,
+       * and an off-screen entrance offset { fromDX, fromDY, fromRot } + per-word
+       * entrance delay. x is the word group's left edge (glyphs run +x). */
+      // Deterministic per-(line,index) pseudo-random in [0,1) — stable layouts.
+      let gLineSeed = 0;
+      function rnd(seed) {
+        const x = Math.sin(seed * 12.9898 + 78.233) * 43758.5453;
+        return x - Math.floor(x);
+      }
+
+      function profileBlock(words, emSize, gap) {
+        // Centered multi-line paragraph. Each token's LEADING gap is `gap` at a
+        // real word boundary, but ~0 when it's a GLUED syllable of the previous
+        // word (so "re"+"mem"+"ber" reads as one tight "remember"). We never wrap
+        // a row right before a glued syllable, so words are never split across rows.
+        const maxRow = Math.min(halfW * 1.7, 13);
+        const leadGap = (wd, isRowStart) => (isRowStart ? 0 : wd.glue ? 0 : gap);
+        const rows = [];
+        let row = [], rowW = 0;
+        for (const wd of words) {
+          // Wrap only at a real word boundary (never before a glued syllable).
+          if (row.length && !wd.glue && rowW + gap + wd.width > maxRow) { rows.push({ items: row, w: rowW }); row = []; rowW = 0; }
+          const l = leadGap(wd, row.length === 0);
+          wd.__lead = l;
+          row.push(wd); rowW += l + wd.width;
+        }
+        if (row.length) rows.push({ items: row, w: rowW });
+        const rowH = emSize * 1.5;
+        const totalH = rows.length * rowH;
+        let y = totalH / 2 - rowH / 2;
+        let ri = 0;
+        for (const r of rows) {
+          let x = -r.w / 2;
+          for (const wd of r.items) {
+            x += wd.__lead;
+            wd.target = { x, y, z: 0 };
+            wd.baseScale = 1.0;
+            wd.rot = 0;
+            wd.fromDX = 0; wd.fromDY = -0.5; wd.fromDZ = 0; wd.fromRot = 0; // gentle fade-up
+            wd.delay = ri * ENTRANCE_STAGGER * 1.4; // line-by-line cascade
+            x += wd.width;
+          }
+          y -= rowH; ri++;
+        }
+      }
+      function countCol(words, parity) {
+        let n = 0;
+        for (let i = 0; i < words.length; i++) if (i % 2 === parity) n++;
+        return n;
+      }
+      function profileColumns(words, emSize, gap) {
+        // B — Chill/Groovy: staggered left/right columns; words cascade up from below.
+        const leftX = -halfW * 0.78;
+        const rightX = halfW * 0.06;
+        const rowH = emSize * 1.5;
+        let ln = 0, rn = 0;
+        const topL = ((countCol(words, 1) - 1) / 2) * rowH;
+        const topR = ((countCol(words, 0) - 1) / 2) * rowH;
+        words.forEach((wd, i) => {
+          const left = i % 2 === 1;
+          wd.baseScale = 1.0;
+          wd.rot = (left ? -1 : 1) * 0.03;
+          if (left) { wd.target = { x: leftX, y: topL - ln * rowH, z: 0 }; ln++; }
+          else { wd.target = { x: rightX, y: topR - rn * rowH, z: 0 }; rn++; }
+          wd.fromDX = 0; wd.fromDY = -halfH * 0.9; wd.fromDZ = 0; wd.fromRot = 0; // cascade up
+          wd.delay = i * ENTRANCE_STAGGER;
+        });
+      }
+      function profileScatter(words, emSize, gap) {
+        // C — High-Energy/Chorus: single words scattered across a wide 3D grid.
+        words.forEach((wd, i) => {
+          const s = gLineSeed + i * 7;
+          wd.target = {
+            x: (rnd(s) * 2 - 1) * halfW * 0.82 - wd.width / 2,
+            y: (rnd(s + 1) * 2 - 1) * halfH * 0.78,
+            z: (rnd(s + 2) * 2 - 1) * 6.0, // deep Z spread -> strong parallax for the chase
+          };
+          wd.baseScale = 0.85 + rnd(s + 3) * 0.7;
+          wd.rot = (rnd(s + 4) * 2 - 1) * 0.18;
+          wd.fromDX = (rnd(s + 5) < 0.5 ? -1 : 1) * halfW * 1.4;
+          wd.fromDY = (rnd(s + 6) * 2 - 1) * halfH * 0.6;
+          wd.fromDZ = -6; // rush in from depth
+          wd.fromRot = (rnd(s + 7) * 2 - 1) * 0.6;
+          wd.delay = i * ENTRANCE_STAGGER * 0.8;
+        });
+      }
+      function profileSidebar(words, emSize, gap) {
+        // D — Aggressive: overlapping multi-layer columns hugging both side margins.
+        const rowH = emSize * 1.05; // tight -> intentional overlap
+        const top = ((Math.ceil(words.length / 2) - 1) / 2) * rowH;
+        let ln = 0, rn = 0;
+        words.forEach((wd, i) => {
+          const left = i % 2 === 0;
+          const baseX = left ? -halfW * 0.96 : halfW * 0.4;
+          const jit = (rnd(gLineSeed + 1000 + i) * 2 - 1) * emSize * 0.5;
+          const k = left ? ln++ : rn++;
+          wd.target = { x: baseX + jit, y: top - k * rowH, z: (i % 3) * -0.6 }; // layered depth
+          wd.baseScale = 1.0;
+          wd.rot = (left ? -1 : 1) * 0.06;
+          wd.fromDX = (left ? -1 : 1) * halfW * 1.6; wd.fromDY = 0; wd.fromDZ = 0;
+          wd.fromRot = wd.rot * 5;
+          wd.delay = i * ENTRANCE_STAGGER * 0.6;
+        });
+      }
+
+      function computeProfile(profile, words, emSize) {
+        // ALL tiers use the readable centered multi-line block, so words always
+        // form normal, clear lines. The BPM tier differentiates the MOTION
+        // (entrance speed, idle intensity, chaos shake) and the CAMERA — it never
+        // scatters glyphs or harms legibility. The 3D look comes from the whole-
+        // line tilt + camera parallax, not from moving letters out of place.
+        profileBlock(words, emSize, emSize * 0.5);
+        // Frustum safe-zone clamp (X): keep every word's right edge on-screen.
+        for (const wd of words) {
+          const rightEdge = wd.target.x + wd.width * wd.baseScale;
+          if (rightEdge > halfW) wd.target.x -= rightEdge - halfW;
+          if (wd.target.x < -halfW) wd.target.x = -halfW;
+        }
+      }
+
+      /* ── § 9  BPM-LOCKED PROFILE ENGINE ──────────────────────────────────
+       * The motion profile is resolved ONCE per track from the detected tempo
+       * (energy fallback when there is no clear beat), then LOCKED for the whole
+       * track. It is never recomputed on mid-phrase timeline updates, so the
+       * activePhraseUid gate stays stable and the layout never toggles/stutters. */
+      let trackLyricIntensity = 0; // set on lyric load (lyricTheme over full text)
+      let smoothEnergy = 0;
+      let lockedProfile = null;    // resolved once per track: 'A'|'B'|'C'|'D'
+      let renderProfile = "B";     // mirror of lockedProfile that drives kinetics
+      let gStagger = CHAR_STAGGER; // per-profile letter-cascade speed
+      let lockedBpm = 0;           // the BPM that decided the lock (for the status bar)
+      let trackBpmOverride = null; // genuine tempo (dictionary/API) — PRIMARY source
+      let everLocked = false;      // true once a tier has been resolved at least once
+
+      /* ── TEMPO LOOKUP (PRIMARY) ──────────────────────────────────────────
+       * Spotify deprecated its Audio-Features `tempo` endpoint (Nov 2024) and no
+       * free, keyless, CORS-friendly title/artist BPM API survives, so the
+       * RELIABLE primary is this local dictionary (instant, no key). Add tracks as
+       *   "title|artist": bpm   (both lowercased; helpers normalise for you).
+       * The live dspBpm estimate stays as the fallback for unlisted tracks. */
+      const BPM_DICTIONARY = {
+        "memory merge|yonkagor": 184, // -> Tier 3 Intense, locked from frame one
+        // "so long|yonkagor": 150,
+        // "antihuman|ivycomb": 174,
+      };
+      // OPTIONAL web lookup (GetSongBPM). Needs a free api_key + a backlink per
+      // their TOS and may be CORS-blocked from app://. Empty = disabled.
+      const GETSONGBPM_KEY = "";
+
+      // Normalise "Title" + "Artist" into a stable dictionary key (drops
+      // (feat …)/[remix], " - Single/Instrumental/Remaster/Live", punctuation).
+      function tempoKey(title, artist) {
+        const clean = (s) => String(s || "").toLowerCase()
+          .replace(/\(.*?\)|\[.*?\]/g, " ")
+          .replace(/\s*-\s*(single|instrumental|remaster.*|live|.*version).*$/i, " ")
+          .replace(/feat\.?.*$/i, " ")
+          .replace(/[^a-z0-9 ]+/g, " ")
+          .replace(/\s+/g, " ").trim();
+        return clean(title) + "|" + clean(artist);
+      }
+      function lookupTempoLocal(title, artist) {
+        const bpm = BPM_DICTIONARY[tempoKey(title, artist)];
+        return Number.isFinite(bpm) ? bpm : null;
+      }
+      async function lookupTempoApi(title, artist) {
+        if (!GETSONGBPM_KEY) return null;
+        try {
+          const q = encodeURIComponent(`song:${title} artist:${artist}`);
+          const r = await fetch(`https://api.getsongbpm.com/search/?api_key=${GETSONGBPM_KEY}&type=both&lookup=${q}`);
+          if (!r.ok) return null;
+          const j = await r.json();
+          const hit = j && j.search && (Array.isArray(j.search) ? j.search[0] : null);
+          const tempo = hit && parseFloat(hit.tempo);
+          return Number.isFinite(tempo) && tempo > 0 ? tempo : null;
+        } catch (_) { return null; }
+      }
+
+      // Raw tempo -> profile. <100 calm ballad/ambient · 100–125 groove ·
+      // 125–140 energetic build · >=140 aggressive/high-intensity (e.g. 180 BPM).
+      // No tempo detected -> fall back to live energy + lyric heuristics.
+      function profileFromBpm(bpm, energy) {
+        if (!(bpm > 0)) {
+          // No clear beat detected -> energy-based 3-tier fallback.
+          const e = Math.max(0, Math.min(1, energy));
+          return e < 0.34 ? "A" : e < 0.66 ? "B" : "D";
+        }
+        if (bpm < 100) return "A"; // Tier 1 — calm: ballad / ambient
+        if (bpm < 140) return "B"; // Tier 2 — pop: cinematic / orbit
+        return "D";                // Tier 3 — intense: rock / punch / erratic
+      }
+
+      // Lock the profile for the whole track (mirror + cascade speed + display BPM).
+      function lockProfile(profile, bpm) {
+        lockedProfile = profile;
+        renderProfile = profile;
+        lockedBpm = Number.isFinite(bpm) ? bpm : 0;
+        everLocked = true;
+        gStagger = CHAR_STAGGER *
+          (profile === "A" ? 1.9 : profile === "D" ? 0.45 : profile === "C" ? 0.6 : 1);
+        return profile;
+      }
+      // Resolve + LOCK once per track. PRIMARY = genuine tempo override (dictionary
+      // / API set on track change); SECONDARY = live dspBpm estimate; then energy.
+      function resolveTrackProfile() {
+        if (lockedProfile) return lockedProfile;
+        const bpm = Number.isFinite(trackBpmOverride) && trackBpmOverride > 0 ? trackBpmOverride : dspBpm;
+        return lockProfile(profileFromBpm(bpm, smoothEnergy), bpm);
+      }
+
+      // Per-profile kinetic intensity — gentle/slow for calm, fast/erratic for
+      // aggressive. Drives the idle vibration, chaos jitter, and alpha-fade speed.
+      //   idle  : idle-wobble amplitude       freq : wobble/vibration rate
+      //   chaos : rapid erratic shake offset   opac : alpha-fade speed multiplier
+      const PROFILE_KINETICS = {
+        A: { idle: 0.45, freq: 0.8, chaos: 0.0, opac: 0.55 }, // ballad / float / ambient
+        B: { idle: 1.0, freq: 1.0, chaos: 0.08, opac: 1.0 },  // groove
+        C: { idle: 1.7, freq: 1.5, chaos: 0.3, opac: 1.5 },   // energetic build
+        D: { idle: 2.8, freq: 2.4, chaos: 0.8, opac: 2.2 },   // rock / punch / aggressive spin
+      };
+      // Human-readable tier label for the status bar (so the active tier is visible).
+      const TIER_NAMES = { A: "Calm", B: "Pop", C: "Pop", D: "Intense" };
+
+      /* ── WORD-LEVEL KINETICS ─────────────────────────────────────────────
+       * The reveal is now strictly WORD-by-word: each word is an atomic group of
+       * static glyphs, and motion lives on the parent group (slide + spring pop +
+       * active-word vibrate/pulse). There is no longer any per-CHARACTER animation
+       * record — `freshChar`/`makeCharFrom` were removed with the letter cascade. */
+
+      /* ── §10  COTODAMA HOOKS ─────────────────────────────────────────── */
+      function onCotodamaNewLine(phrase) {
+        if (!fontsReady) return;
+        // §2 STRICT PHRASE DEBOUNCE — build a layout ONCE per phrase. If the same
+        // phrase fires again while the clock keeps ticking, bail before generating.
+        const phraseKey = (phrase.fullText || "") + "@" + (phrase.startTime || 0);
+        if (phraseKey === lastPhraseKey) return;
+        lastPhraseKey = phraseKey;
+        // §1 FOOLPROOF CLEAR of the previous phrase BEFORE any new geometry.
+        clearCanvasLyrics();
+        const motion = latestMotion;
+        // Phase 1 baseline forces the flat "block"; Phase 2 uses the BPM-locked
+        // profile (resolved + frozen once per track — never per phrase).
+        const profile = ANIMATIONS_ACTIVE ? resolveTrackProfile() : "A";
+        // Deterministic per-line seed for the scatter/sidebar pseudo-randoms.
+        gLineSeed = Math.floor((phrase.startTime || 0) * 97) + phrase.words.length;
+        const emSize = CHAR_SIZE * (ANIMATIONS_ACTIVE ? 0.85 + 0.3 * smoothEnergy : 1.0);
+        // TIGHT tracking — letters sit side-by-side to form readable words. Inter-
+        // word spacing is the larger `gap` set inside the layout; this is only the
+        // small breathing space BETWEEN letters of the same word.
+        const tracking = CHAR_SIZE * 0.02;
+        // Background is always pure white across every profile — no panel/invert.
+        bgTarget = 0;
+        const color = inkColorAt(0);
+
+        const group = new THREE.Group();
+        scene.add(group);
+
+        const words = phrase.words.map((w, wi) => {
+          const wd = {
+            text: w.text, group: new THREE.Group(),
+            profile, emSize, tracking, color,
+            glue: !!w.glue, width: 0,
+            target: { x: 0, y: 0, z: 0 }, baseScale: 1, rot: 0,
+            fromDX: 0, fromDY: 0, fromDZ: 0, fromRot: 0, delay: 0,
+            posCur: { x: 0, y: 0, z: 0 }, rotCur: 0, scaleCur: 1, scaleVel: 0,
+            // WORD-BY-WORD SEQUENCE PRINT. Every word begins as a muted "future"
+            // token (FUTURE_OPACITY). onCotodamaNewWord promotes it to "active"
+            // (instant full opacity + pop/vibrate) and then "past" (full opacity,
+            // calm — the readable building sentence).
+            state: "future",
+            opacity: 0, opacityTarget: ANIMATIONS_ACTIVE ? FUTURE_OPACITY : 1.0,
+            seed: rnd(gLineSeed + wi * 37 + 3) * 1000, born: 0, chars: [],
+          };
+          const f = fontFor(w.text, profile, false) || fontCache.values().next().value;
+          wd.font = f;
+          wd.width = measureWord(w.text, f, emSize, tracking);
+          group.add(wd.group);
+          return wd;
+        });
+
+        computeProfile(profile, words, emSize);
+
+        const now = performance.now() / 1000;
+        for (const wd of words) {
+          const f = fontFor(wd.text, profile, false) || wd.font;
+          // ATOMIC WORD GROUP — every glyph is a STATIC child sitting at its baseX
+          // inside the word's parent group. Characters are NEVER animated or moved
+          // individually (zero character splits), so "surrender" can never read as
+          // "sur ren der". Only the parent group is transformed: reveal opacity for
+          // the sequence print, plus the spring pop + vibrate on the active word.
+          const built = buildGlyphsInto(wd.group, wd.text, f, emSize, tracking);
+          wd.chars = built.chars; // { front, shadow, geo, baseX } — fixed in the group
+          wd.born = now;
+          // The word group is parked at its layout target from frame one (no fly-in).
+          wd.posCur = { x: wd.target.x, y: wd.target.y, z: wd.target.z };
+          wd.rotCur = wd.rot;
+          wd.scaleCur = wd.baseScale;
+          wd.group.position.set(wd.posCur.x, wd.posCur.y, wd.posCur.z);
+          wd.group.rotation.z = wd.rotCur;
+          wd.group.scale.setScalar(wd.baseScale);
+        }
+
+        activeLine = { group, words, phrase, profile, emSize, tracking, color, activeIdx: -1 };
+        rebuildMeshIndex(); // track every front+shadow mesh now on screen
+      }
+
+      function relayoutActiveLine() {
+        // Recompute targets for the current line (used by resize reflex).
+        const l = activeLine;
+        for (const wd of l.words) wd.width = measureWord(wd.text, wd.font, l.emSize, l.tracking);
+        computeProfile(l.profile, l.words, l.emSize); // words animate to new targets in tick
+      }
+
+      function onCotodamaNewWord(_wordData, index) {
+        if (!activeLine) return;
+        const words = activeLine.words;
+        // Phase 1 baseline: no per-word kinetics — the whole line shows flat.
+        if (!ANIMATIONS_ACTIVE) { activeLine.activeIdx = index; return; }
+        // STRICT WORD-BY-WORD SEQUENCE PRINT — reclassify EVERY word against the
+        // clock's current word index so the reveal is always correct even after a
+        // forward seek that skips words:
+        //   i <  index -> "past"   : already sung, stays at full layout opacity.
+        //   i === index -> "active": INSTANT jump to full opacity + snap pop +
+        //                             high-energy vibrate/pulse (BPM-tier scaled).
+        //   i >  index -> "future" : un-sung, eased down to the muted FUTURE_OPACITY.
+        const now = performance.now() / 1000;
+        for (let i = 0; i < words.length; i++) {
+          const wd = words[i];
+          if (i < index) {
+            wd.state = "past";
+            wd.opacityTarget = 1.0;
+          } else if (i === index) {
+            wd.state = "active";
+            wd.opacity = 1.0;        // instant — the active word never fades in
+            wd.opacityTarget = 1.0;
+            wd.scaleCur = wd.baseScale * POP_SCALE; // snap "Pop" kick; springs home
+            wd.scaleVel = 0;
+            wd.born = now;
+          } else {
+            wd.state = "future";
+            wd.opacityTarget = ANIMATIONS_ACTIVE ? FUTURE_OPACITY : 1.0;
+          }
+        }
+        activeLine.activeIdx = index;
+      }
+
+      /* ── §11  LYRIC STATE LOOP (clock-driven, scrub-safe) ────────────── */
+      let phrases = [];
+      let currentPhraseIndex = -1;
+      let currentWordIndex = -1;
+      let activePhraseUid = null; // §2 — identity of the phrase currently on screen (its startTime)
+      let lastT = 0;
+      let latestMotion = moodToMotion({ valence: 0, arousal: 0, energy: 0 });
+      let LATENCY_OFFSET_SEC = 0;
+
+      // §2 — AIRTIGHT SINGLE-TRIGGER LOCK. These persist across frames so a
+      // line/word fires EXACTLY once as the clock crosses its boundary, never
+      // re-firing during the many frames it stays "current". Hard-reset to -1
+      // only on a genuine track change (resetLyricState) or a backward seek.
+      let lastTriggeredLineIndex = -1;
+      let lastTriggeredWordIndex = -1;
+      let lastPhraseKey = ""; // raw-text/start guard so a phrase builds only once
+
+      function phraseIndexAt(t) {
+        let lo = 0, hi = phrases.length - 1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1, p = phrases[mid];
+          if (t < p.startTime) hi = mid - 1;
+          else if (t >= p.endTime) lo = mid + 1;
+          else return mid;
+        }
+        return -1;
+      }
+      function wordIndexAt(phrase, t) {
+        const w = phrase.words; let res = -1;
+        for (let i = 0; i < w.length; i++) { if (t >= w[i].time) res = i; else break; }
+        return res;
+      }
+      function syncLyrics(rawPosSec) {
+        if (!phrases.length) return;
+        const t = rawPosSec - LATENCY_OFFSET_SEC;
+        lastT = t;
+
+        const incomingPhraseIndex = phraseIndexAt(t);
+
+        // §1 STRICT PHRASE-ID STATE GATE — `currentPhraseIndex` is the single
+        // source of truth (the active phrase UID). The audio clock interpolates
+        // between sparse SMTC/UxPlay packets and can momentarily report a position
+        // that jitters BACKWARD; without this gate that re-fires the previous
+        // phrase and produces the flashing/overlap stutter.
+
+        // (a) Between phrases (gap / lead-in): keep the current phrase on screen.
+        //     Never clear or rebuild on jitter — only a genuine track change resets.
+        if (incomingPhraseIndex < 0) return;
+
+        // (b) Reject any stale / backward-snapping timestamp packet. The timeline
+        //     may NEVER violently snap back to an earlier, already-completed phrase.
+        if (incomingPhraseIndex < currentPhraseIndex) return;
+
+        // (c) EXPLICIT PHRASE-UID GATE + forward-only build. We (re)build the
+        //     layout EXACTLY once per phrase: only when the on-screen phrase
+        //     IDENTITY actually changes (activePhraseUid), never on a repeated
+        //     packet for the phrase already showing — that's the duplicate-build /
+        //     flicker guard. (We gate the BUILD, not the whole tick, so the
+        //     word-advance below still runs every frame for the active phrase.)
+        //     onCotodamaNewLine() runs clearCanvasLyrics() first (synchronously,
+        //     before any new geometry and before this frame renders).
+        const incomingPhraseUid = phrases[incomingPhraseIndex].startTime;
+        if (incomingPhraseIndex > currentPhraseIndex && incomingPhraseUid !== activePhraseUid) {
+          currentPhraseIndex = incomingPhraseIndex;
+          activePhraseUid = incomingPhraseUid;
+          currentWordIndex = -1;
+          onCotodamaNewLine(phrases[incomingPhraseIndex]);
+        }
+
+        // Same phrase: advance the active WORD highlight forward-only (never back).
+        const incomingWordIndex = wordIndexAt(phrases[currentPhraseIndex], t);
+        if (incomingWordIndex > currentWordIndex) {
+          currentWordIndex = incomingWordIndex;
+          onCotodamaNewWord(phrases[currentPhraseIndex].words[incomingWordIndex], incomingWordIndex);
+        }
+      }
+
+      /* ── §12  LOOPBACK ANALYSER (energy + onset beat) ────────────────── */
+      let audioCtx = null, analyser = null, timeData = null, freqData = null;
+      let energy = 0, energyAvg = 0, shakeEnv = 0, loopbackTried = false, firstBufferResumed = false;
+
+      // §6 — live DSP features (smoothed) for the vibe classifier.
+      let dspBassTreble = 1; // bass/treble energy ratio (>1 = bass-heavy)
+      let dspOnsetRate = 0;  // detected onsets per second (rolling)
+      let dspBpm = 0;        // octave-corrected tempo estimate (final)
+      let dspBpmRaw = 0;     // pre-correction smoothed inter-onset estimate
+      let energyDev = 0;     // rolling mean-deviation of the energy envelope (dynamic threshold)
+      const onsetTimes = []; // recent onset timestamps (sec)
+      let lastOnsetSec = -1;
+      const DYN_ONSET_K = 1.6;       // onset fires when energy-energyAvg > K*energyDev (dynamic, not static)
+      const MIN_ONSET_MARGIN = 0.05; // floor so near-silence never self-triggers
+      const ONSET_DEBOUNCE = 0.11;   // s min gap between onsets (~max 540/min -> captures fast subdivisions)
+
+      // §3 — force the AudioContext out of its suspended/idle state. Browsers
+      // create an AudioContext suspended until a user gesture; we call resume()
+      // after creation, on the FIRST audio buffer, and from a one-time gesture.
+      function resumeAudioContext() {
+        if (audioCtx && audioCtx.state !== "running") audioCtx.resume().catch(() => {});
+      }
+      // One-time user-gesture safety net — the whole window is the click/key
+      // catcher (no visible overlay needed). The loopback node is NEVER wired to
+      // audioCtx.destination, so this only un-idles the analyser; it can never
+      // create a system-wide speaker echo/feedback loop.
+      (function armGestureResume() {
+        const h = () => {
+          resumeAudioContext();
+          window.removeEventListener("pointerdown", h);
+          window.removeEventListener("keydown", h);
+        };
+        window.addEventListener("pointerdown", h);
+        window.addEventListener("keydown", h);
+      })();
+
+      async function startLoopback() {
+        if (loopbackTried) return; loopbackTried = true;
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return;
+        try {
+          const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
+          stream.getVideoTracks().forEach((t) => t.stop());
+          const at = stream.getAudioTracks();
+          if (!at.length) { stream.getTracks().forEach((t) => t.stop()); return; }
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          audioCtx = new Ctx();
+          const src = audioCtx.createMediaStreamSource(new MediaStream(at));
+          analyser = audioCtx.createAnalyser();
+          analyser.fftSize = 1024;
+          timeData = new Uint8Array(analyser.fftSize);
+          freqData = new Uint8Array(analyser.frequencyBinCount); // §6 spectrum DSP
+          // ISOLATED: connect the loopback ONLY to the analyser. We deliberately
+          // do NOT call src.connect(audioCtx.destination) — the loopback stream
+          // already IS the speaker output, so routing it back to destination
+          // would feed the speakers into themselves (echo). UxPlay plays the
+          // AirPlay audio out the default device on its own.
+          src.connect(analyser);
+          resumeAudioContext(); // un-idle the analyser the moment the graph exists
+        } catch (e) {
+          console.warn("loopback unavailable:", e && e.message);
+        }
+      }
+      function readEnergy() {
+        if (!analyser) return 0;
+        analyser.getByteTimeDomainData(timeData);
+        let sum = 0;
+        for (let i = 0; i < timeData.length; i++) { const v = (timeData[i] - 128) / 128; sum += v * v; }
+        const rms = Math.min(1, Math.sqrt(sum / timeData.length) * 1.8);
+        // First-buffer resume: the instant real audio data flows, force-run the ctx.
+        if (!firstBufferResumed && rms > 0.0001) { firstBufferResumed = true; resumeAudioContext(); }
+        return rms;
+      }
+      // §6 — spectrum balance (bass/treble), onset density, and a rolling BPM
+      // estimate from inter-onset intervals. Cheap, frame-rate friendly.
+      function readDsp(tSec) {
+        if (!analyser || !freqData) return;
+        analyser.getByteFrequencyData(freqData);
+        const n = freqData.length;
+        const bassEnd = Math.max(1, Math.floor(n * 0.08));
+        const trebStart = Math.floor(n * 0.5);
+        let bass = 0, treb = 0;
+        for (let i = 0; i < bassEnd; i++) bass += freqData[i];
+        for (let i = trebStart; i < n; i++) treb += freqData[i];
+        bass /= bassEnd; treb /= Math.max(1, n - trebStart);
+        dspBassTreble += ((bass + 1) / (treb + 1) - dspBassTreble) * 0.1;
+
+        // ── DYNAMIC-THRESHOLD ONSET DETECTION ───────────────────────────────
+        // Track a rolling mean-deviation of the energy envelope; an onset must
+        // clear energyAvg + DYN_ONSET_K*energyDev — a threshold that SCALES with
+        // the track's own dynamics — instead of a STATIC 0.12 margin. On loud,
+        // compressed fast tracks this lets consecutive transients each register
+        // as separate beats rather than clumping into one slow interval (the root
+        // of the 138->~69 half-tempo read).
+        energyDev += (Math.abs(energy - energyAvg) - energyDev) * 0.05;
+        const dynMargin = Math.max(MIN_ONSET_MARGIN, DYN_ONSET_K * energyDev);
+        if (energy - energyAvg > dynMargin && (lastOnsetSec < 0 || tSec - lastOnsetSec > ONSET_DEBOUNCE)) {
+          if (lastOnsetSec > 0) {
+            const iv = tSec - lastOnsetSec;
+            if (iv > 0.20 && iv < 2) { // ~30..300 BPM plausibility window
+              const raw = 60 / iv;
+              dspBpmRaw = dspBpmRaw > 0 ? dspBpmRaw * 0.7 + raw * 0.3 : raw;
+            }
+          }
+          lastOnsetSec = tSec;
+          onsetTimes.push(tSec);
+        }
+        while (onsetTimes.length && tSec - onsetTimes[0] > 4) onsetTimes.shift();
+        dspOnsetRate = onsetTimes.length / 4;
+
+        // ── SUB-HARMONIC DOUBLE-TIME CORRECTION ─────────────────────────────
+        // A smoothed estimate below ~90 BPM is often a half-tempo (octave) error.
+        // If transients are arriving FASTER than the detected beat (sustained
+        // density over the rolling 4s window exceeds 1.5x the beat), the true
+        // tempo is double — snap it up (69->138). A genuinely slow track has
+        // sparse onsets, fails the density test, and is left untouched. Finally
+        // clamp into a plausible band so we never invent an extreme tempo.
+        let corrected = dspBpmRaw;
+        if (corrected > 0 && corrected < 90 && dspOnsetRate * 60 > corrected * 1.5) corrected *= 2;
+        if (corrected > 0) corrected = Math.min(210, Math.max(50, corrected));
+        dspBpm = corrected;
+      }
+
+      /* ── §13  INSTRUMENTAL PARTICLE VISUALIZER ───────────────────────── */
+      let pointCloud = null;
+      function ensurePointCloud() {
+        if (pointCloud) return pointCloud;
+        const N = 1800;
+        const pos = new Float32Array(N * 3);
+        const base = new Float32Array(N * 3);
+        for (let i = 0; i < N; i++) {
+          // Fibonacci sphere for an even point matrix.
+          const phi = Math.acos(1 - 2 * (i + 0.5) / N);
+          const th = Math.PI * (1 + Math.sqrt(5)) * i;
+          const r = 5.2;
+          const x = r * Math.sin(phi) * Math.cos(th);
+          const y = r * Math.sin(phi) * Math.sin(th);
+          const z = r * Math.cos(phi);
+          base[i * 3] = x; base[i * 3 + 1] = y; base[i * 3 + 2] = z;
+          pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+        }
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+        const mat = new THREE.PointsMaterial({ size: 0.06, transparent: true, opacity: 0.0 });
+        pointCloud = new THREE.Points(geo, mat);
+        pointCloud.userData.base = base;
+        scene.add(pointCloud);
+        return pointCloud;
+      }
+      function updatePointCloud(dt, tSec) {
+        const pc = ensurePointCloud();
+        const show = phrases.length === 0 && (playing || energy > 0.02);
+        const mat = pc.material;
+        mat.opacity += ((show ? 0.9 : 0) - mat.opacity) * (1 - Math.exp(-4 * dt));
+        if (mat.opacity < 0.01) { pc.visible = false; return; }
+        pc.visible = true;
+        mat.color = inkColorAt(bgLevel);
+        // Phase 1: a stationary point sphere (clean instrumental placeholder).
+        // Phase 2: energy-reactive pulse + slow rotation.
+        if (!ANIMATIONS_ACTIVE) return;
+        const arr = pc.geometry.attributes.position.array;
+        const base = pc.userData.base;
+        const pulse = 1 + energy * 0.9 + 0.05 * Math.sin(tSec * 2);
+        for (let i = 0; i < base.length; i += 3) {
+          const n = 1 + 0.12 * Math.sin(tSec * 3 + i);
+          arr[i] = base[i] * pulse * n;
+          arr[i + 1] = base[i + 1] * pulse * n;
+          arr[i + 2] = base[i + 2] * pulse;
+        }
+        pc.geometry.attributes.position.needsUpdate = true;
+        pc.rotation.y += dt * (0.05 + energy * 0.5);
+        pc.rotation.x += dt * 0.02;
+      }
+
+      /* ── §14  PLAYBACK CLOCK ─────────────────────────────────────────── */
+      let playing = false, anchorPosSec = 0, anchorWallMs = performance.now(), rateMul = 1, curDurationSec = 0;
+      let lastSmtcStatus = "";              // last SMTC status — detects play/pause flips
+      const RESYNC_THRESHOLD_SEC = 0.35;    // only HARD re-anchor on drift beyond this (a real seek)
+      function posSec() {
+        if (!playing) return Math.max(0, anchorPosSec);
+        let p = anchorPosSec + ((performance.now() - anchorWallMs) / 1000) * rateMul;
+        if (curDurationSec > 0) p = Math.min(p, curDurationSec + 0.5);
+        return Math.max(0, p);
+      }
+
+      /* ── §15  ANIMATION LOOP (delta-time) ────────────────────────────── */
+      let lastTickMs = performance.now();
+      const camLook = { x: 0, y: 0, z: 0 }; // smoothed camera look-at target
+      let dInvert = false, prevOnsetSec = -1; // Profile D invert state
+      function tick() {
+        requestAnimationFrame(tick);
+        const nowMs = performance.now();
+        let dt = (nowMs - lastTickMs) / 1000;
+        lastTickMs = nowMs;
+        if (dt > 0.1) dt = 0.1; // clamp after tab-stalls
+        const tSec = nowMs / 1000;
+
+        // Energy + mood + onset.
+        energy = readEnergy();
+        energyAvg = energyAvg * 0.92 + energy * 0.08;
+        smoothEnergy = smoothEnergy + (energy - smoothEnergy) * (1 - Math.exp(-1.5 * dt));
+        if (energy - energyAvg > 0.12) shakeEnv = 1; else shakeEnv = Math.max(0, shakeEnv - dt * 3.2);
+        readDsp(tSec); // §6 spectrum/onset/BPM features
+        latestMotion = moodToMotion(sampleMood({ energy }, 0));
+
+        // Lyric position + word firing.
+        const p = posSec();
+        syncLyrics(p);
+        if (curDurationSec > 0) progressFill.style.width = Math.min(100, (p / curDurationSec) * 100).toFixed(2) + "%";
+
+        // Background is LOCKED solid white at all times (no inversion, no dim).
+        applyBg();
+
+        // Per-profile camera (Phase 1 baseline = locked dead-center).
+        updateCamera(dt, tSec, nowMs);
+
+        // Word kinetics (spring pop + slide/spin entrance + opacity).
+        // Only the single active phrase is ever updated/drawn — there is no
+        // exiting-line pipeline, so old text can never overlap the new phrase.
+        if (activeLine) {
+          updateLineWords(activeLine, dt, tSec, false);
+          // §3 — angle the whole phrase dynamically on its X/Y axes. Combined with
+          // the per-profile perspective camera + the z-separated shadow layer, the
+          // tilt produces dramatic kinetic parallax. Bounded so text stays legible.
+          const ang = 0.09 + 0.13 * smoothEnergy; // legible 3D tilt (camera adds the drama)
+          activeLine.group.rotation.y = Math.sin(tSec * 0.5) * ang;
+          activeLine.group.rotation.x = Math.cos(tSec * 0.4) * ang * 0.45;
+        }
+
+        updatePointCloud(dt, tSec);
+        renderer.render(scene, camera);
+      }
+
+      function updateLineWords(line, dt, tSec, exiting) {
+        // BPM-locked tier drives the alpha-ease speed + the active-word energy.
+        const K = PROFILE_KINETICS[renderProfile] || PROFILE_KINETICS.B;
+        const opacRate = 1 - Math.exp(-OPAC_K * K.opac * dt);
+        const nowS = performance.now() / 1000; // wall clock — matches the wd.born stamp
+        for (const wd of line.words) {
+          // ── REVEAL OPACITY (the sequence print). The ACTIVE word reveals its
+          //    glyphs LEFT→RIGHT as a rapid typewriter cascade (CHAR_STAGGER apart
+          //    from wd.born, each ramping over REVEAL_RAMP); every letter locks to
+          //    full charcoal FRONT_ALPHA (0.85) as it lands. PAST words hold all
+          //    glyphs at full 1.0 (the building sentence); FUTURE words ease to 0
+          //    -> the vis gate flips mesh.visible=false (fully hidden, no ghosts).
+          const tgt = exiting ? 0 : wd.opacityTarget;
+          wd.opacity += (tgt - wd.opacity) * opacRate;
+          const wordVis = wd.opacity > 0.004;
+          const stagger = ANIMATIONS_ACTIVE && !exiting && wd.state === "active";
+          const elapsed = stagger ? nowS - (wd.born || nowS) : 0;
+          for (let ci = 0; ci < wd.chars.length; ci++) {
+            const c = wd.chars[ci];
+            let rev = 1; // per-glyph reveal multiplier (1 = fully shown)
+            if (stagger) {
+              rev = (elapsed - ci * CHAR_STAGGER) / REVEAL_RAMP;
+              rev = rev < 0 ? 0 : rev > 1 ? 1 : rev;
+            }
+            const cvis = stagger ? rev > 0.001 : wordVis;
+            c.front.visible = cvis; c.shadow.visible = cvis;
+            c.front.material.opacity = wd.opacity * FRONT_ALPHA * rev;
+            c.shadow.material.opacity = wd.opacity * SHADOW_ALPHA * rev;
+          }
+
+          // ── WORD-GROUP TRANSFORM. Glyphs are STATIC inside the group; only the
+          //    parent group moves — the layout slide + spring "Pop" (kicked on
+          //    activation). No per-character motion, so words never split.
+          if (ANIMATIONS_ACTIVE) {
+            applyKineticTransforms(wd, { dt }); // eases posCur/rotCur, springs scaleCur -> baseScale
+          } else {
+            wd.posCur.x = wd.target.x; wd.posCur.y = wd.target.y; wd.posCur.z = wd.target.z;
+            wd.rotCur = 0; wd.scaleCur = wd.baseScale;
+          }
+          let px = wd.posCur.x, py = wd.posCur.y, pz = wd.posCur.z;
+          let scale = wd.scaleCur;
+
+          // ── ACTIVE-WORD HIGH-ENERGY LAYER (184 BPM Intense = profile D): a fast
+          //    rhythmic PULSE on scale + an erratic ~30 Hz positional VIBRATE on the
+          //    whole word. Past/future words stay calm and legible — only the
+          //    currently sung word snaps, pulses and rattles.
+          if (ANIMATIONS_ACTIVE && wd.state === "active") {
+            const pulse = 1 + Math.sin(tSec * (6 + 7 * K.freq)) * (0.03 + 0.05 * K.idle);
+            scale *= pulse;
+            const f = Math.floor(tSec * 30); // reshuffle window -> buzzing vibration
+            const amp = wd.emSize * (0.03 + 0.12 * K.chaos);
+            px += (rnd(wd.seed + f) - 0.5) * amp;
+            py += (rnd(wd.seed + f + 17) - 0.5) * amp;
+          }
+          wd.group.position.set(px, py, pz);
+          wd.group.rotation.z = wd.rotCur;
+          wd.group.scale.setScalar(Math.max(0.001, scale));
+        }
+        return false;
+      }
+
+      /* ── PHASE 2 KINETIC TRANSFORM HOOK ──────────────────────────────────
+       * The entire Cotodama motion model for ONE word, per frame. Called from
+       * updateLineWords ONLY when ANIMATIONS_ACTIVE is true; with the flag off
+       * this is never invoked, so lyrics stay perfectly flat. Toggling the flag
+       * re-activates: slide/spin entrance, the spring "Pop", and (via the weight
+       * swap in onCotodamaNewWord) the 300/900 weight + opacity contrast. */
+      function applyKineticTransforms(wd, state) {
+        const { dt } = state;
+        // Slide/spin toward the layout-profile target (incl. Z depth).
+        const kp = 1 - Math.exp(-SLIDE_K * dt);
+        wd.posCur.x += (wd.target.x - wd.posCur.x) * kp;
+        wd.posCur.y += (wd.target.y - wd.posCur.y) * kp;
+        wd.posCur.z += (wd.target.z - wd.posCur.z) * kp;
+        wd.rotCur += (wd.rot - wd.rotCur) * (1 - Math.exp(-ROT_K * dt));
+        // Rhythmic spring scaling ("The Pop"): Hooke's law + damping, semi-implicit Euler.
+        const a = -SPRING_K * (wd.scaleCur - wd.baseScale) - SPRING_DAMP * wd.scaleVel;
+        wd.scaleVel += a * dt;
+        wd.scaleCur += wd.scaleVel * dt;
+      }
+
+      /* ── PER-PROFILE CAMERA (3 tiers) ────────────────────────────────────
+       * A calm: gentle infinity-loop pan · B pop: smooth ORBITAL sweep · D
+       * intense: snappy word-CHASE + transient jitter rattle. Phase 1 (flag off)
+       * keeps the camera dead-centered. The locked BPM tier picks the branch. */
+      function updateCamera(dt, tSec, nowMs) {
+        if (!ANIMATIONS_ACTIVE) { camera.position.set(0, 0, CAM_Z); camera.lookAt(0, 0, 0); return; }
+        const prof = activeLine ? activeLine.profile : "A";
+
+        // D (intense) — aggressively chase the active word + add jitter rattle.
+        if (prof === "D" && activeLine && activeLine.activeIdx >= 0 && activeLine.words[activeLine.activeIdx]) {
+          const wd = activeLine.words[activeLine.activeIdx];
+          const tx = activeLine.group.position.x + wd.posCur.x + wd.width * 0.5 * wd.scaleCur;
+          const ty = activeLine.group.position.y + wd.posCur.y;
+          const tz = wd.posCur.z;
+          const kl = 1 - Math.exp(-9 * dt);
+          camLook.x += (tx - camLook.x) * kl;
+          camLook.y += (ty - camLook.y) * kl;
+          camLook.z += (tz - camLook.z) * kl;
+          let jx = 0, jy = 0, jz = 0;
+          if (shakeEnv > 0.02) {
+            const amp = (0.35 + latestMotion.shake * 2.5) * shakeEnv; // speaker-cabinet rattle
+            jx = Math.sin(nowMs * 0.13) * amp;
+            jy = Math.cos(nowMs * 0.17) * amp;
+            jz = Math.sin(nowMs * 0.2) * amp * 0.5;
+          }
+          const kp = 1 - Math.exp(-10 * dt); // very snappy chase
+          const cpx = camLook.x + Math.sin(tSec * 2.4) + jx;
+          const cpy = camLook.y + 0.5 + jy;
+          const cpz = camLook.z + (CAM_Z - 6) + jz;
+          camera.position.x += (cpx - camera.position.x) * kp;
+          camera.position.y += (cpy - camera.position.y) * kp;
+          camera.position.z += (cpz - camera.position.z) * kp;
+          camera.lookAt(camLook.x, camLook.y, camLook.z);
+          return;
+        }
+
+        // A / B — relax the look target back toward the origin.
+        const kl = 1 - Math.exp(-4 * dt);
+        camLook.x += (0 - camLook.x) * kl;
+        camLook.y += (0 - camLook.y) * kl;
+        camLook.z += (0 - camLook.z) * kl;
+
+        let cx = 0, cy = 0, cz = CAM_Z;
+        if (prof === "B") {
+          // B (pop) — smooth orbital sweep around the phrase in the X/Z plane.
+          const sp = 0.35 + smoothEnergy * 0.4;
+          const R = 2.4 + smoothEnergy * 1.2;
+          cx = Math.sin(tSec * sp) * R;
+          cz = CAM_Z - 1 + Math.cos(tSec * sp) * R * 0.6;
+          cy = Math.sin(tSec * sp * 0.5) * 0.6;
+        } else {
+          // A (calm) — slow infinity-loop (lemniscate) pan.
+          const s = tSec * 0.22;
+          cx = Math.sin(s) * 1.1;
+          cy = Math.sin(s * 2) * 0.55;
+        }
+        camera.position.set(cx, cy, cz);
+        camera.lookAt(camLook.x, camLook.y, camLook.z);
+      }
+      tick();
+
+      /* ── §16  ENHANCED LRC PARSER + LINE→WORD INTERPOLATOR ───────────── */
+      function parseTimeTag(s) {
+        const m = /^(\d+):(\d+(?:\.\d+)?)$/.exec(s.trim());
+        return m ? parseInt(m[1], 10) * 60 + parseFloat(m[2]) : null;
+      }
+      function stripWordTags(b) { return b.replace(/<\d+:\d+(?:\.\d+)?>/g, ""); }
+
+      // Tokenize a line and evenly divide totalLineDuration across the words.
+      // Returns [{ time, text }] with time RELATIVE to the line start (0..dur).
+      function interpolateLineToWords(lineText, totalLineDuration) {
+        const text = String(lineText || "").trim();
+        if (!text) return [];
+        const parts = text.split(/\s+/).filter(Boolean);
+        const n = parts.length;
+        const dur = Math.max(0.001, totalLineDuration);
+        // Space-split fallback -> every token is a separate word (no glue).
+        return parts.map((w, i) => ({ time: (i / n) * dur, text: w, glue: false }));
+      }
+      function parseWordTags(body, lineStart, offset) {
+        const re = /<(\d+:\d+(?:\.\d+)?)>/g; const ms = []; let m;
+        while ((m = re.exec(body))) { const t = parseTimeTag(m[1]); if (t != null) ms.push({ time: t + offset, index: m.index, len: m[0].length }); }
+        if (!ms.length) return [];
+        // Collect every visible token — the pre-text before the first tag, then
+        // one per word tag — recording the ABSOLUTE [vStart,vEnd) span of its
+        // TRIMMED text in `body`. The word-vs-syllable decision is then made from
+        // the actual gap between adjacent visible spans (tag markup stripped):
+        //   • whitespace in the gap  -> real word BOUNDARY  -> glue:false (gets the layout gap)
+        //   • no whitespace at all   -> GLUED syllable      -> glue:true  (joined tight)
+        // This is robust to tags-before-word, tags-after-word, and stray spaces,
+        // so syllable splits never gap ("vi sions") and real words never clump
+        // ("meawkward").
+        const toks = [];
+        const pushTok = (time, segStart, segEnd) => {
+          const seg = body.slice(segStart, segEnd);
+          const text = seg.trim();
+          if (!text) return;
+          const lead = seg.length - seg.replace(/^\s+/, "").length;
+          const vStart = segStart + lead;
+          toks.push({ time, text, vStart, vEnd: vStart + text.length });
+        };
+        pushTok(lineStart, 0, ms[0].index); // pre-text (before the first tag)
+        for (let i = 0; i < ms.length; i++) {
+          const s = ms[i].index + ms[i].len;
+          const e = i < ms.length - 1 ? ms[i + 1].index : body.length;
+          pushTok(ms[i].time, s, e);
+        }
+        if (!toks.length) return [];
+        const words = [];
+        for (let i = 0; i < toks.length; i++) {
+          let glue = false;
+          if (i > 0) {
+            const gapText = stripWordTags(body.slice(toks[i - 1].vEnd, toks[i].vStart));
+            glue = !/\s/.test(gapText); // no whitespace between visible spans -> glued
+          }
+          words.push({ time: toks[i].time, text: toks[i].text, glue });
+        }
+        return words;
+      }
+      function parseEnhancedLRC(text, audioDuration) {
+        const meta = { title: "", artist: "" }; let offset = 0; const raw = [];
+        for (const line of String(text).split(/\r?\n/)) {
+          const mm = /^\s*\[(ti|ar|al|offset):(.*)\]\s*$/i.exec(line);
+          if (mm) { if (mm[1].toLowerCase() === "offset") { const o = parseFloat(mm[2]); if (Number.isFinite(o)) offset = o / 1000; } continue; }
+          const starts = []; let body = line, tag;
+          while ((tag = /^\s*\[(\d+:\d+(?:\.\d+)?)\]/.exec(body))) { const t = parseTimeTag(tag[1]); if (t != null) starts.push(t); body = body.slice(tag[0].length); }
+          if (!starts.length) continue;
+          const hasWordTags = /<\d+:\d+(?:\.\d+)?>/.test(body);
+          for (const s of starts) raw.push({ start: s + offset, body, hasWordTags });
+        }
+        raw.sort((a, b) => a.start - b.start);
+        const out = [];
+        for (let i = 0; i < raw.length; i++) {
+          const r = raw[i];
+          const endTime = i < raw.length - 1 ? raw[i + 1].start
+            : Number.isFinite(audioDuration) && audioDuration > r.start ? audioDuration : r.start + 4;
+          let words = r.hasWordTags ? parseWordTags(r.body, r.start, offset) : [];
+          if (!words.length) {
+            // Line-level only -> interpolate evenly across the line duration.
+            words = interpolateLineToWords(stripWordTags(r.body), endTime - r.start)
+              .map((w) => ({ time: r.start + w.time, text: w.text }));
+          }
+          if (!words.length) continue;
+          out.push({ startTime: r.start, endTime, fullText: words.map((w) => w.text).join(" ").trim(), words });
+        }
+        return { phrases: out, meta };
+      }
+
+      /* ── §17  SMTC INTAKE + CLOCK ANCHOR (single source of truth) ────────── */
+      let curTrackKey = "", curTrack = { title: "", artist: "", album: "" };
+
+      // SMTC is the ONLY source — there is no multi-source arbiter to get stuck.
+      // Every packet is applied directly, inside a strict try/catch so a missing
+      // or garbled attribute can never freeze the communication bridge.
+      function ingest(p) {
+        try {
+          if (!p || typeof p !== "object") return;
+          applyActive(p);
+        } catch (e) {
+          console.warn("[smtc] ingest error:", e && e.message ? e.message : e);
+        }
+      }
+
+      function applyActive(p) {
+        // Idle / no media session — keep the last track but mark paused; the
+        // "Listening…" splash stays only until the FIRST real playing packet.
+        if (p.status === "none" || p.status === "closed") {
+          playing = false;
+          lastSmtcStatus = p.status; // so the next real packet re-anchors cleanly (status flip)
+          setStatus(curTrackKey ? "Paused · SMTC" : "Listening");
+          return;
+        }
+        // ── SMOOTHED, DRIFT-TOLERANT CLOCK RE-ANCHOR ──────────────────────
+        // The SMTC Position is a stale SNAPSHOT measured at p.updatedMs, so we
+        // age-compensate with that timestamp. Then we ONLY hard re-anchor on a
+        // real discontinuity (track change / seek / play-pause flip); the routine
+        // ~1s heartbeat is otherwise IGNORED so the wall-clock interpolation runs
+        // smooth. This kills the per-heartbeat snap-back that stalled words
+        // ("awkward pausing") and the catch-up overshoot that skipped them
+        // ("word skipping") — the bugs in the capture.
+        const prevStatus = lastSmtcStatus;
+        lastSmtcStatus = p.status;
+        const willPlay = p.status === "playing";
+        const rate = Number.isFinite(p.rate) && p.rate > 0 ? p.rate : 1;
+        const predicted = posSec(); // current smooth clock (still uses the PRIOR `playing`)
+        playing = willPlay;
+        if (Number.isFinite(p.positionMs)) {
+          const ageSec = willPlay && Number.isFinite(p.updatedMs)
+            ? Math.max(0, (Date.now() - p.updatedMs) / 1000) : 0;
+          const reported = Math.max(0, p.positionMs / 1000 + ageSec * rate);
+          const discontinuity =
+            prevStatus !== p.status ||                       // play/pause flip
+            !curTrackKey ||                                  // first track
+            Math.abs(reported - predicted) > RESYNC_THRESHOLD_SEC; // seek / track change
+          if (discontinuity) { anchorPosSec = reported; anchorWallMs = performance.now(); }
+        }
+        rateMul = rate;
+        if (Number.isFinite(p.durationMs) && p.durationMs > 0) curDurationSec = p.durationMs / 1000;
+
+        const title = p.title || "", artist = p.artist || "", album = p.album || "";
+        const hasTrack = !!(title || artist);
+
+        // IMMEDIATE HANDSHAKE: the instant a valid playing state / track arrives,
+        // hide the splash and spin up the kinetic canvas + loopback analyser.
+        if ((hasTrack || playing) && !startPrompt.classList.contains("hidden")) {
+          startPrompt.classList.add("hidden");
+          songInfo.classList.add("visible");
+          startLoopback();
+        }
+
+        // Genuine track change -> clear typography + fetch fresh lyrics.
+        const key = (title + "␟" + artist).toLowerCase();
+        if (hasTrack && key !== curTrackKey) {
+          curTrackKey = key; curTrack = { title, artist, album };
+          songTitleEl.textContent = (title || "—").toUpperCase();
+          songArtistEl.textContent = artist || "—";
+          phrases = []; trackLyricIntensity = 0;
+          resetLyricState(); // also releases the BPM profile lock for a clean re-resolve
+          // PRIMARY tempo source: instant local-dictionary lookup. If known, LOCK
+          // the tier immediately (renderProfile drives the kinetics from frame one),
+          // bypassing the silent-intro limitation of the live audio estimator.
+          trackBpmOverride = lookupTempoLocal(title, artist);
+          if (trackBpmOverride) {
+            lockProfile(profileFromBpm(trackBpmOverride, 0), trackBpmOverride);
+          } else if (GETSONGBPM_KEY) {
+            // SECONDARY: best-effort web lookup; applied only if it returns before
+            // the first phrase locks (and still on the same track).
+            const t = title, a = artist;
+            lookupTempoApi(t, a).then((bpm) => {
+              if (bpm && t === curTrack.title && a === curTrack.artist && !lockedProfile) {
+                trackBpmOverride = bpm;
+                lockProfile(profileFromBpm(bpm, 0), bpm);
+              }
+            });
+          }
+          // LYRIC SOURCE PRIORITY: a hand-authored local word-timestamp entry wins
+          // (exact vocal timing, zero network); otherwise fall through to LRCLIB.
+          const localLyr = LOCAL_LYRICS[tempoKey(title, artist)];
+          if (localLyr) applyLocalLyrics(localLyr);
+          else scheduleLyricFetch(title, artist, album);
+        }
+        // Show the locked BPM tier (verifies the 3-tier engine is live). lockedBpm
+        // is the genuine dictionary/API tempo when known, else the live estimate.
+        const tier = everLocked
+          ? ` · ${Math.round(lockedBpm) || "~"}bpm ${TIER_NAMES[renderProfile] || renderProfile}`
+          : "";
+        setStatus((playing ? "Playing" : "Paused") + " · SMTC" + tier);
+      }
+      function resetLyricState() {
+        retireActiveLine();
+        currentPhraseIndex = -1; currentWordIndex = -1; activePhraseUid = null; lastT = 0;
+        // §2 — hard-reset the single-trigger locks ONLY on a genuine track change.
+        lastTriggeredLineIndex = -1; lastTriggeredWordIndex = -1; lastPhraseKey = "";
+        // §9 — release the BPM profile lock so the next track re-resolves ONCE.
+        lockedProfile = null;
+      }
+
+      /* ── §17b  LOCAL WORD-TIMESTAMP OVERRIDE (highest-priority lyric source) ──
+       * Hand-authored, per-word ABSOLUTE timestamps for a specific track — the
+       * surest way to match exact vocal delivery when LRCLIB timing is missing or
+       * loose. Keyed by tempoKey(title, artist) (the same normaliser as the BPM
+       * map). Shape:
+       *   "<title>|<artist>": { lines: [ { words: [{ text, time }, ...] }, ... ] }
+       *     • time = absolute seconds into the track (the word's vocal onset)
+       *     • optional `glue: true` joins a word tightly to the previous one
+       *       (syllable split) instead of taking the inter-word gap
+       * EMPTY by default — add an entry to pin a track; otherwise the app falls
+       * through to the LRCLIB → NetEase network pipeline below. No lyrics are
+       * bundled here — author your own timing. Example (commented):
+       *   "memory merge|yonkagor": { lines: [
+       *     { words: [{ text: "Somehow", time: 0.0 }, { text: "they", time: 0.65 }] },
+       *   ] },
+       */
+      const LOCAL_LYRICS = {
+      };
+      // Build the engine's phrase array from a LOCAL_LYRICS entry — mirrors exactly
+      // what parseEnhancedLRC emits: { startTime, endTime, fullText, words[] }, with
+      // each line's endTime set to the next line's start (last line -> duration).
+      function buildPhrasesFromLocal(entry, durSec) {
+        const lines = entry && Array.isArray(entry.lines) ? entry.lines : [];
+        const out = [];
+        for (const ln of lines) {
+          const ws = (ln && Array.isArray(ln.words) ? ln.words : [])
+            .filter((w) => w && w.text != null && Number.isFinite(w.time))
+            .map((w) => ({ time: w.time, text: String(w.text), glue: !!w.glue }));
+          if (!ws.length) continue;
+          out.push({ startTime: ws[0].time, endTime: 0, fullText: ws.map((w) => w.text).join(" ").trim(), words: ws });
+        }
+        out.sort((a, b) => a.startTime - b.startTime);
+        for (let i = 0; i < out.length; i++) {
+          out[i].endTime = i < out.length - 1 ? out[i + 1].startTime
+            : (Number.isFinite(durSec) && durSec > out[i].startTime ? durSec : out[i].startTime + 4);
+        }
+        return out;
+      }
+      function applyLocalLyrics(entry) {
+        phrases = buildPhrasesFromLocal(entry, curDurationSec);
+        trackLyricIntensity = lyricTheme(phrases.map((p) => p.fullText).join(" "));
+        resetLyricState();
+        setStatus("Lyrics (local) · SMTC");
+      }
+
+      /* ── §18  LYRIC FAILOVER POOL (LRCLIB → NetEase) ─────────────────── */
+      let lyricsReqId = 0, lyricTimer = null;
+      function scheduleLyricFetch(title, artist, album) {
+        clearTimeout(lyricTimer);
+        setStatus("Fetching lyrics…");
+        const id = ++lyricsReqId;
+        lyricTimer = setTimeout(() => fetchLyrics(title, artist, album, id), 350);
+      }
+      function pickBest(arr, durSec) {
+        if (!Array.isArray(arr)) return null;
+        const synced = arr.filter((x) => x && x.syncedLyrics);
+        if (!synced.length) return null;
+        if (!durSec) return synced[0];
+        synced.sort((a, b) => Math.abs((a.duration || 0) - durSec) - Math.abs((b.duration || 0) - durSec));
+        return synced[0];
+      }
+      async function fetchLRCLIB(title, artist, album, durSec) {
+        const base = "https://lrclib.net/api/";
+        const q = new URLSearchParams({ track_name: title, artist_name: artist });
+        if (album) q.set("album_name", album);
+        if (durSec) q.set("duration", String(durSec));
+        let r = await fetch(base + "get?" + q.toString(), { headers: { Accept: "application/json" } });
+        if (r.ok) return await r.json();
+        const sq = new URLSearchParams({ track_name: title, artist_name: artist });
+        const rs = await fetch(base + "search?" + sq.toString(), { headers: { Accept: "application/json" } });
+        if (rs.ok) return pickBest(await rs.json(), durSec);
+        return null;
+      }
+      async function fetchNetease(title, artist) {
+        // SECONDARY (best-effort): unofficial NetEase proxy. Disabled unless
+        // NETEASE_API_BASE is set (proxies rotate / may CORS-block app://).
+        if (!NETEASE_API_BASE) return null;
+        try {
+          const s = await fetch(`${NETEASE_API_BASE}/search?keywords=${encodeURIComponent(artist + " " + title)}&limit=1`);
+          if (!s.ok) return null;
+          const sj = await s.json();
+          const id = sj && sj.result && sj.result.songs && sj.result.songs[0] && sj.result.songs[0].id;
+          if (!id) return null;
+          const l = await fetch(`${NETEASE_API_BASE}/lyric?id=${id}`);
+          if (!l.ok) return null;
+          const lj = await l.json();
+          const lrc = lj && lj.lrc && lj.lrc.lyric;
+          return lrc ? { syncedLyrics: lrc } : null;
+        } catch (_) { return null; }
+      }
+      function applyLyrics(data, id, durSec) {
+        if (id !== lyricsReqId) return;
+        if (!data || data.instrumental) return noLyrics(data && data.instrumental ? "Instrumental" : "No lyrics");
+        const lrc = data.syncedLyrics || "";
+        if (!lrc) return noLyrics("No synced lyrics");
+        const parsed = parseEnhancedLRC(lrc, durSec || data.duration || 0);
+        if (id !== lyricsReqId) return;
+        phrases = parsed.phrases;
+        trackLyricIntensity = lyricTheme(phrases.map((p) => p.fullText).join(" "));
+        resetLyricState();
+        setStatus("Lyrics synced · SMTC");
+      }
+      function noLyrics(msg) {
+        // No lyrics -> clear text; the instrumental visualizer takes over.
+        phrases = []; trackLyricIntensity = 0; resetLyricState(); setStatus(msg + " · visualizer");
+      }
+      async function fetchLyrics(title, artist, album, id) {
+        const durSec = curDurationSec > 0 ? Math.round(curDurationSec) : 0;
+        try {
+          let data = null;
+          try { data = await fetchLRCLIB(title, artist, album, durSec); } catch (_) {}
+          if ((!data || !data.syncedLyrics) && id === lyricsReqId) {
+            const ne = await fetchNetease(title, artist); // SECONDARY
+            if (ne) data = ne;
+          }
+          applyLyrics(data, id, durSec);
+        } catch (e) {
+          if (id === lyricsReqId) showError("Lyrics: " + (e && e.message ? e.message : e));
+        }
+      }
+
+      /* ── §19  UTILITIES + SHORTCUTS ──────────────────────────────────── */
+      function setStatus(msg) { statusBar.textContent = String(msg).toUpperCase(); }
+      let errorTimer = null;
+      function showError(msg) {
+        errorToast.textContent = msg; errorToast.classList.add("visible");
+        clearTimeout(errorTimer); errorTimer = setTimeout(() => errorToast.classList.remove("visible"), 5000);
+      }
+      document.addEventListener("keydown", (e) => {
+        if (e.code === "BracketLeft") { LATENCY_OFFSET_SEC = Math.max(-2, LATENCY_OFFSET_SEC - 0.025); setStatus("Lyric offset " + Math.round(LATENCY_OFFSET_SEC * 1000) + " ms"); }
+        else if (e.code === "BracketRight") { LATENCY_OFFSET_SEC = Math.min(2, LATENCY_OFFSET_SEC + 0.025); setStatus("Lyric offset " + Math.round(LATENCY_OFFSET_SEC * 1000) + " ms"); }
+        else if (e.code === "KeyR" && curTrack.title) { scheduleLyricFetch(curTrack.title, curTrack.artist, curTrack.album); }
+      });
+
+      /* ── §20  STARTUP: fonts + sources ───────────────────────────────── */
+      Promise.allSettled([loadFont(F.montLight), loadFont(F.montBold), loadFont(F.montBlack), loadFont(F.cormLight), loadFont(F.cormBold)])
+        .then((res) => {
+          if (res.some((r) => r.status === "fulfilled")) fontsReady = true;
+          else showError("Font load failed — check network.");
+        });
+
+      // Windows SMTC is the single source of truth (Spotify / Apple Music /
+      // browsers), forwarded over IPC from main.
+      if (window.cotodama && typeof window.cotodama.onSmtcUpdate === "function") {
+        window.cotodama.onSmtcUpdate((p) => ingest(p));
+      } else {
+        setStatus("No detection bridge");
+      }
+
+      // §1 — backend BPM waterfall (Layer 1 dictionary + Layer 3 GetSongBPM)
+      // resolved in the main process and pushed here once per track. Layer 4
+      // (live dspBpm) stays the renderer-side fallback. The instant local lock on
+      // track change still fires first; this IPC value reinforces it and supplies
+      // network tempos the renderer can't fetch itself under app:// CORS.
+      if (window.cotodama && typeof window.cotodama.onBpmUpdate === "function") {
+        window.cotodama.onBpmUpdate((incomingData) => {
+          if (!incomingData) return;
+          const bpm = parseInt(incomingData.bpm, 10); // strict numeric cast
+          if (!Number.isFinite(bpm) || bpm <= 0) return;
+          const currentBpmProfile = profileFromBpm(bpm, 0);
+          console.log("[BPM Debug] Selected Profile: " + currentBpmProfile);
+          // Apply only for the current track, and only if a tier hasn't locked
+          // yet, so the profile resolves exactly ONCE per track.
+          if (incomingData.title === curTrack.title && incomingData.artist === curTrack.artist && !lockedProfile) {
+            trackBpmOverride = bpm;
+            lockProfile(currentBpmProfile, bpm);
+          }
+        });
+      }
+    </script>
+  </body>
+</html>

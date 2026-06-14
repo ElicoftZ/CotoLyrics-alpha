@@ -1,0 +1,55 @@
+{
+  "name": "cotodama-lyric-speaker",
+  "version": "2.0.0",
+  "description": "Passive desktop Cotodama-style lyric speaker: auto-detects playing music (Windows SMTC + optional AirPlay 2 sidecar), fetches synced lyrics from LRCLIB, and renders word-by-word kinetic typography in Three.js.",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder",
+    "dist:portable": "electron-builder --win portable"
+  },
+  "dependencies": {
+    "three": "^0.163.0"
+  },
+  "devDependencies": {
+    "electron": "^30.0.1",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.cotodama.lyricspeaker",
+    "productName": "Lyric Speaker",
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "mood-engine.js",
+      "node_modules/three/build/three.module.js"
+    ],
+    "extraResources": [
+      "smtc-bridge.ps1",
+      {
+        "from": "resources/airplay",
+        "to": "airplay",
+        "filter": ["**/*"]
+      }
+    ],
+    "win": {
+      "target": ["portable"]
+    },
+    "portable": {
+      "artifactName": "LyricSpeaker-${version}-portable.exe"
+    }
+  },
+  "keywords": [
+    "electron",
+    "threejs",
+    "lyric",
+    "smtc",
+    "airplay",
+    "lrclib",
+    "visualization",
+    "cotodama"
+  ],
+  "author": "Eli",
+  "license": "MIT"
+}

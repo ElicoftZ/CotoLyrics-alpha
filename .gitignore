@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+build/
+
+# Orphaned third-party AirPlay/UxPlay redistributables (feature removed; ~255 MB of
+# Qt/GStreamer/ffmpeg/uxplay binaries — not part of the SMTC-only app source)
+resources/airplay/
+
+# Logs
+*.log
+npm-debug.log*
+
+# Local / editor / OS artifacts
+imgui.ini
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Env / secrets
+.env
+.env.*
