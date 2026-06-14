@@ -15,7 +15,7 @@ app and CotoLyrics does the rest.
 - **Beat-aware animation:** the tempo is resolved per track and locked to one of
   three motion profiles (calm → groovy → intense).
 - **Live audio analysis** of system loopback drives the beat/energy reactions.
-- ** (Optional) BPM detcetion & animation, BPM data powered by GetSongBPM
+- **(Optional) BPM detcetion & animation**, BPM data powered by GetSongBPM
 
 ---
 
