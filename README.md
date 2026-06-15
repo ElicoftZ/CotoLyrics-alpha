@@ -19,7 +19,7 @@ app and CotoLyrics does the rest.
 - **Beat-aware animation:** the tempo is resolved per track and locked to one of
   three motion profiles (calm → groovy → intense).
 - **Live audio analysis** of system loopback drives the beat/energy reactions.
-- **(Optional) BPM detcetion & animation**, BPM data powered by GetSongBPM
+- **(Optional) BPM detection & animation**, BPM data powered by GetSongBPM
 
 ---
 
@@ -33,8 +33,8 @@ app and CotoLyrics does the rest.
 ## Install & run
 
 ```bash
-git clone https://github.com/ElicoftZ/CotoLyrics.git
-cd CotoLyrics
+git clone https://github.com/ElicoftZ/CotoLyrics-alpha.git
+cd CotoLyrics-alpha
 npm install
 npm start
 ```
