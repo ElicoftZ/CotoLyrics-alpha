@@ -8,6 +8,10 @@ to the song's tempo.
 No browser extension, no manual song entry, no login. Press play in your music
 app and CotoLyrics does the rest.
 
+![CotoLyrics rendering live synced lyrics as kinetic typography](docs/screenshot.png)
+
+> *Live capture — "HAI YOROKONDE (English Ver)" by Kocchi no Kento, mid-line word reveal.*
+
 - **Auto-detects now-playing music** via Windows **SMTC** (System Media Transport
   Controls) — works with Spotify, Apple Music, and any browser/app that reports
   media info to Windows.
