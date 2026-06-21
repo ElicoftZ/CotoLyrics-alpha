@@ -572,7 +572,7 @@ function createWindow() {
     width: 1200,
     height: 800,
     backgroundColor: "#FFFFFF",
-    title: "Lyric Speaker",
+    title: "CotoLyrics",
     resizable: true,
     webPreferences: {
       nodeIntegration: false,

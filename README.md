@@ -39,7 +39,7 @@ npm install
 npm start
 ```
 
-That's it. A white window titled **Lyric Speaker** opens and shows
+That's it. A white window titled **CotoLyrics** opens and shows
 *"Listening…"* until you start playing music.
 
 ## How to use
@@ -86,7 +86,6 @@ instantly with zero network calls:
 
 ```js
 const BPM_DICTIONARY = {
-  "memory merge|yonkagor": 184,
   "your song title|artist name": 128,
 };
 ```
@@ -96,16 +95,16 @@ Keys are lowercase `title|artist`; the app sanitizes incoming metadata (strips
 
 ### Optional online BPM lookup (GetSongBPM)
 
-For songs not in your dictionary, the app can look up the tempo over the network.
-Get a free API key from [getsongbpm.com](https://getsongbpm.com/api) and set it in
-[`main.js`](main.js):
+For songs not in your dictionary, the app can optionally look up the tempo over the
+network. Get a free API key from [getsongbpm.com](https://getsongbpm.com/api) and set
+it as an environment variable (so no key is ever committed):
 
-```js
-const GETSONGBPM_KEY = "your_api_key_here";
+```bash
+set GETSONGBPM_KEY=your_api_key_here      # Windows (cmd)
+$env:GETSONGBPM_KEY="your_api_key_here"   # Windows (PowerShell)
 ```
 
-Results are cached in memory, so each song is only queried once. With no key set,
-the app falls back to estimating tempo live from the audio.
+With no key set, the app falls back to estimating tempo live from the audio.
 
 ### Hand-authored lyric timing (optional)
 
@@ -115,9 +114,9 @@ timestamp (seconds):
 
 ```js
 const LOCAL_LYRICS = {
-  "memory merge|yonkagor": {
+  "your song title|artist name": {
     lines: [
-      { words: [{ text: "Somehow", time: 0.0 }, { text: "they", time: 0.65 }] },
+      { words: [{ text: "First", time: 0.0 }, { text: "word", time: 0.65 }] },
     ],
   },
 };
@@ -157,4 +156,4 @@ npm run build           # full electron-builder output
 
 ## License
 
-MIT — see [`package.json`](package.json).
+[GNU GPL v3.0 or later](LICENSE) — see the [`LICENSE`](LICENSE) file for the full text.
