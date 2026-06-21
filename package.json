@@ -6,9 +6,11 @@
   "scripts": {
     "start": "electron .",
     "build": "electron-builder",
-    "dist:portable": "electron-builder --win portable"
+    "dist:portable": "electron-builder --win portable",
+    "rebuild": "npx --yes @electron/rebuild -o better-sqlite3"
   },
   "dependencies": {
+    "better-sqlite3": "^12.11.1",
     "three": "^0.163.0"
   },
   "devDependencies": {
@@ -23,18 +25,27 @@
       "preload.js",
       "index.html",
       "mood-engine.js",
-      "node_modules/three/build/three.module.js"
+      "music-database.js",
+      "db-ingest-worker.js",
+      "node_modules/three/build/three.module.js",
+      "node_modules/better-sqlite3/**/*",
+      "node_modules/bindings/**/*",
+      "node_modules/file-uri-to-path/**/*"
     ],
     "extraResources": [
       "smtc-bridge.ps1",
       {
         "from": "resources/airplay",
         "to": "airplay",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
-      "target": ["portable"]
+      "target": [
+        "portable"
+      ]
     },
     "portable": {
       "artifactName": "LyricSpeaker-${version}-portable.exe"

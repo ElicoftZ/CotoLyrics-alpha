@@ -514,6 +514,11 @@
       let lockedBpm = 0;           // the BPM that decided the lock (for the status bar)
       let trackBpmOverride = null; // genuine tempo (dictionary/API) — PRIMARY source
       let everLocked = false;      // true once a tier has been resolved at least once
+      // Current track identity. Declared HERE — BEFORE tick() runs — so the §learn
+      // hook (maybeLearnBpm) in the animation loop can read curTrack without a
+      // temporal-dead-zone ReferenceError. (That TDZ crash aborted module init,
+      // so the IPC listeners never registered and the window froze on the splash.)
+      let curTrackKey = "", curTrack = { title: "", artist: "", album: "" };
 
       /* ── TEMPO LOOKUP (PRIMARY) ──────────────────────────────────────────
        * Spotify deprecated its Audio-Features `tempo` endpoint (Nov 2024) and no
@@ -522,9 +527,9 @@
        *   "title|artist": bpm   (both lowercased; helpers normalise for you).
        * The live dspBpm estimate stays as the fallback for unlisted tracks. */
       const BPM_DICTIONARY = {
-        "memory merge|yonkagor": 184, // -> Tier 3 Intense, locked from frame one
-        // "so long|yonkagor": 150,
-        // "antihuman|ivycomb": 174,
+        // Empty in the public source. Add tracks as "title|artist": bpm
+        // (both lowercased; helpers normalise for you), e.g.
+        // "never gonna give you up|rick astley": 113,
       };
       // OPTIONAL web lookup (GetSongBPM). Needs a free api_key + a backlink per
       // their TOS and may be CORS-blocked from app://. Empty = disabled.
@@ -805,6 +810,7 @@
 
       /* ── §12  LOOPBACK ANALYSER (energy + onset beat) ────────────────── */
       let audioCtx = null, analyser = null, timeData = null, freqData = null;
+      let beatAnalyser = null, beatTime = null; // §6 low-passed analyser for kick/beat onset detection
       let energy = 0, energyAvg = 0, shakeEnv = 0, loopbackTried = false, firstBufferResumed = false;
 
       // §6 — live DSP features (smoothed) for the vibe classifier.
@@ -812,12 +818,19 @@
       let dspOnsetRate = 0;  // detected onsets per second (rolling)
       let dspBpm = 0;        // octave-corrected tempo estimate (final)
       let dspBpmRaw = 0;     // pre-correction smoothed inter-onset estimate
-      let energyDev = 0;     // rolling mean-deviation of the energy envelope (dynamic threshold)
+      let energyDev = 0;     // rolling mean-deviation of the onset envelope (dynamic threshold)
+      let beatEnergyAvg = 0; // §6 rolling avg of the LOW-PASSED beat envelope (kick transients)
       const onsetTimes = []; // recent onset timestamps (sec)
       let lastOnsetSec = -1;
       const DYN_ONSET_K = 1.6;       // onset fires when energy-energyAvg > K*energyDev (dynamic, not static)
       const MIN_ONSET_MARGIN = 0.05; // floor so near-silence never self-triggers
       const ONSET_DEBOUNCE = 0.11;   // s min gap between onsets (~max 540/min -> captures fast subdivisions)
+      // §learn — auto-learn dspBpm for UNKNOWN tracks: once the estimate holds
+      // steady, ship it to main to grow bpm-dictionary.json (once per track).
+      let learnedThisTrack = false;
+      let dspStableVal = 0, dspStableSince = 0;
+      const LEARN_STABLE_SEC = 6; // dspBpm must hold within tolerance this long before saving
+      const LEARN_TOL = 4;        // ± BPM counted as "stable"
 
       // §3 — force the AudioContext out of its suspended/idle state. Browsers
       // create an AudioContext suspended until a user gesture; we call resume()
@@ -860,6 +873,20 @@
           // would feed the speakers into themselves (echo). UxPlay plays the
           // AirPlay audio out the default device on its own.
           src.connect(analyser);
+          // §6 — DEDICATED BEAT ANALYSER. A BiquadFilter lowpass (~160 Hz) strips
+          // vocals/synths/hats so only kick + sub-bass transients survive; that
+          // clean rhythmic signal drives onset detection. The MAIN analyser above
+          // stays full-spectrum so energy/shake visuals keep their highs.
+          try {
+            const lp = audioCtx.createBiquadFilter();
+            lp.type = "lowpass";
+            lp.frequency.value = 160; // 150-200 Hz band: kick fundamentals
+            lp.Q.value = 0.7;
+            beatAnalyser = audioCtx.createAnalyser();
+            beatAnalyser.fftSize = 1024;
+            beatTime = new Uint8Array(beatAnalyser.fftSize);
+            src.connect(lp); lp.connect(beatAnalyser);
+          } catch (_) { beatAnalyser = null; } // fall back to full-spectrum onset detection
           resumeAudioContext(); // un-idle the analyser the moment the graph exists
         } catch (e) {
           console.warn("loopback unavailable:", e && e.message);
@@ -896,9 +923,22 @@
         // compressed fast tracks this lets consecutive transients each register
         // as separate beats rather than clumping into one slow interval (the root
         // of the 138->~69 half-tempo read).
-        energyDev += (Math.abs(energy - energyAvg) - energyDev) * 0.05;
+        // BEAT signal: low-passed kick/sub-bass transients when the filtered
+        // analyser is up; full-spectrum energy as a fallback. Isolating the kick
+        // is what lets consecutive beats register instead of clumping into one
+        // slow interval (the 138->~69 octave-drop the spec targets).
+        let beatNow = energy, beatAvg = energyAvg;
+        if (beatAnalyser && beatTime) {
+          beatAnalyser.getByteTimeDomainData(beatTime);
+          let bs = 0;
+          for (let i = 0; i < beatTime.length; i++) { const v = (beatTime[i] - 128) / 128; bs += v * v; }
+          beatNow = Math.min(1, Math.sqrt(bs / beatTime.length) * 1.8);
+          beatEnergyAvg = beatEnergyAvg * 0.92 + beatNow * 0.08;
+          beatAvg = beatEnergyAvg;
+        }
+        energyDev += (Math.abs(beatNow - beatAvg) - energyDev) * 0.05;
         const dynMargin = Math.max(MIN_ONSET_MARGIN, DYN_ONSET_K * energyDev);
-        if (energy - energyAvg > dynMargin && (lastOnsetSec < 0 || tSec - lastOnsetSec > ONSET_DEBOUNCE)) {
+        if (beatNow - beatAvg > dynMargin && (lastOnsetSec < 0 || tSec - lastOnsetSec > ONSET_DEBOUNCE)) {
           if (lastOnsetSec > 0) {
             const iv = tSec - lastOnsetSec;
             if (iv > 0.20 && iv < 2) { // ~30..300 BPM plausibility window
@@ -923,6 +963,25 @@
         if (corrected > 0 && corrected < 90 && dspOnsetRate * 60 > corrected * 1.5) corrected *= 2;
         if (corrected > 0) corrected = Math.min(210, Math.max(50, corrected));
         dspBpm = corrected;
+      }
+
+      // §learn — when dspBpm settles for a track with NO authoritative tempo,
+      // ship it to main (which persists it to bpm-dictionary.json). At most once
+      // per track; only saves a stable, plausible estimate (never a momentary read).
+      function maybeLearnBpm(tSec) {
+        if (learnedThisTrack || !curTrack || !curTrack.title) return;
+        if (Number.isFinite(trackBpmOverride) && trackBpmOverride > 0) return; // already known -> nothing to learn
+        const v = dspBpm;
+        if (!(v >= 50 && v <= 210)) { dspStableSince = 0; return; } // implausible -> keep waiting
+        if (Math.abs(v - dspStableVal) > LEARN_TOL) { dspStableVal = v; dspStableSince = tSec; return; } // drifting -> restart timer
+        if (dspStableSince && tSec - dspStableSince >= LEARN_STABLE_SEC) {
+          learnedThisTrack = true;
+          const bpm = Math.round(v);
+          if (window.cotodama && typeof window.cotodama.learnBpm === "function") {
+            window.cotodama.learnBpm(curTrack.title, curTrack.artist, bpm);
+          }
+          console.log(`[BPM Learn] Saved estimate ${bpm} for "${curTrack.title}".`);
+        }
       }
 
       /* ── §13  INSTRUMENTAL PARTICLE VISUALIZER ───────────────────────── */
@@ -1005,6 +1064,7 @@
         smoothEnergy = smoothEnergy + (energy - smoothEnergy) * (1 - Math.exp(-1.5 * dt));
         if (energy - energyAvg > 0.12) shakeEnv = 1; else shakeEnv = Math.max(0, shakeEnv - dt * 3.2);
         readDsp(tSec); // §6 spectrum/onset/BPM features
+        try { maybeLearnBpm(tSec); } catch (e) { /* §3 — never let the learn hook halt the frame loop */ }
         latestMotion = moodToMotion(sampleMood({ energy }, 0));
 
         // Lyric position + word firing.
@@ -1265,7 +1325,7 @@
       }
 
       /* ── §17  SMTC INTAKE + CLOCK ANCHOR (single source of truth) ────────── */
-      let curTrackKey = "", curTrack = { title: "", artist: "", album: "" };
+      // curTrackKey / curTrack are declared earlier (before tick()) to avoid a TDZ.
 
       // SMTC is the ONLY source — there is no multi-source arbiter to get stuck.
       // Every packet is applied directly, inside a strict try/catch so a missing
@@ -1330,6 +1390,7 @@
         const key = (title + "␟" + artist).toLowerCase();
         if (hasTrack && key !== curTrackKey) {
           curTrackKey = key; curTrack = { title, artist, album };
+          learnedThisTrack = false; dspStableSince = 0; dspStableVal = 0; // §learn — re-arm per track
           songTitleEl.textContent = (title || "—").toUpperCase();
           songArtistEl.textContent = artist || "—";
           phrases = []; trackLyricIntensity = 0;
@@ -1356,6 +1417,13 @@
           const localLyr = LOCAL_LYRICS[tempoKey(title, artist)];
           if (localLyr) applyLocalLyrics(localLyr);
           else scheduleLyricFetch(title, artist, album);
+
+          // §3 — FORCEFUL UI DEFROST. At the absolute end of track init, kill the
+          // listening splash outright (regardless of Low/Mid/High/fallback tempo)
+          // and reveal the kinetic canvas. The screen unfreezes the instant a song
+          // is detected, even if a later step (layout/profile) hiccups.
+          startPrompt.style.display = "none";
+          songInfo.classList.add("visible");
         }
         // Show the locked BPM tier (verifies the 3-tier engine is live). lockedBpm
         // is the genuine dictionary/API tempo when known, else the live estimate.
@@ -1385,8 +1453,8 @@
        * EMPTY by default — add an entry to pin a track; otherwise the app falls
        * through to the LRCLIB → NetEase network pipeline below. No lyrics are
        * bundled here — author your own timing. Example (commented):
-       *   "memory merge|yonkagor": { lines: [
-       *     { words: [{ text: "Somehow", time: 0.0 }, { text: "they", time: 0.65 }] },
+       *   "<title>|<artist>": { lines: [
+       *     { words: [{ text: "First", time: 0.0 }, { text: "word", time: 0.65 }] },
        *   ] },
        */
       const LOCAL_LYRICS = {
@@ -1529,16 +1597,22 @@
       // network tempos the renderer can't fetch itself under app:// CORS.
       if (window.cotodama && typeof window.cotodama.onBpmUpdate === "function") {
         window.cotodama.onBpmUpdate((incomingData) => {
-          if (!incomingData) return;
-          const bpm = parseInt(incomingData.bpm, 10); // strict numeric cast
-          if (!Number.isFinite(bpm) || bpm <= 0) return;
-          const currentBpmProfile = profileFromBpm(bpm, 0);
-          console.log("[BPM Debug] Selected Profile: " + currentBpmProfile);
-          // Apply only for the current track, and only if a tier hasn't locked
-          // yet, so the profile resolves exactly ONCE per track.
-          if (incomingData.title === curTrack.title && incomingData.artist === curTrack.artist && !lockedProfile) {
-            trackBpmOverride = bpm;
-            lockProfile(currentBpmProfile, bpm);
+          // §3 — aggressive exception gate: a bad payload or a profile-mapping
+          // discrepancy must NEVER halt the render thread or lock up the UI.
+          try {
+            if (!incomingData) return;
+            const bpm = parseInt(incomingData.bpm, 10); // strict numeric cast
+            if (!Number.isFinite(bpm) || bpm <= 0) return;
+            const currentBpmProfile = profileFromBpm(bpm, 0);
+            console.log("[BPM Debug] Selected Profile: " + currentBpmProfile);
+            // Apply only for the current track, and only if a tier hasn't locked
+            // yet, so the profile resolves exactly ONCE per track.
+            if (incomingData.title === curTrack.title && incomingData.artist === curTrack.artist && !lockedProfile) {
+              trackBpmOverride = bpm;
+              lockProfile(currentBpmProfile, bpm);
+            }
+          } catch (err) {
+            console.error("[Frontend Init Crash Blocked]", err);
           }
         });
       }

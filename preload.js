@@ -28,4 +28,12 @@ contextBridge.exposeInMainWorld("cotodama", {
     ipcRenderer.on("bpm-update", h);
     return () => ipcRenderer.removeListener("bpm-update", h);
   },
+  // §learn — ship a settled dspBpm estimate for an UNKNOWN track to main, which
+  // appends it to the persistent bpm-dictionary.json (fire-and-forget).
+  learnBpm: (title, artist, bpm) => ipcRenderer.send("learn-bpm", { title, artist, bpm }),
+  // §5 — tempo+year lookup. Tries the local SQLite cache first, then an open
+  // metadata network fallback (3s budget) which is cached back for next time.
+  // Resolves to { bpm:int, year:int|null } or null (caller then falls to live
+  // dspBpm). Frontend stays clean either way.
+  getBpm: (title, artist) => ipcRenderer.invoke("music-database:get-bpm", title, artist),
 });
