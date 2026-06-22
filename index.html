@@ -70,6 +70,9 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.min.js"></script>
+    <!-- Robust live tempo estimator (Layer 3). Classic script so window.BpmEstimator
+         is defined before the deferred module below runs (same pattern as opentype). -->
+    <script src="/bpm-estimator.js"></script>
 
     <script type="module">
       "use strict";
@@ -587,12 +590,34 @@
           (profile === "A" ? 1.9 : profile === "D" ? 0.45 : profile === "C" ? 0.6 : 1);
         return profile;
       }
-      // Resolve + LOCK once per track. PRIMARY = genuine tempo override (dictionary
-      // / API set on track change); SECONDARY = live dspBpm estimate; then energy.
+      // Live profile follower. The motion tier tracks the LIVE dspBpm estimate
+      // until an authoritative tempo (dictionary/API) locks it — so a fast track
+      // whose estimate needs a few seconds to settle is NEVER frozen on an early
+      // wrong tier (the "stuck on Calm while the song is 184 BPM" bug: the tier
+      // used to lock on the first lyric line, before dspBpm had warmed up). A
+      // short debounce stops the tier flickering across a boundary mid-settle.
+      let liveTierCand = null, liveTierCandSince = 0;
+      function updateLiveProfile(tSec) {
+        if (lockedProfile) return;            // authoritative tempo already froze the tier
+        const bpm = Number.isFinite(trackBpmOverride) && trackBpmOverride > 0 ? trackBpmOverride : dspBpm;
+        if (!(bpm > 0)) return;               // nothing settled yet -> keep current default
+        lockedBpm = bpm; everLocked = true;   // status bar reflects the live value
+        const next = profileFromBpm(bpm, smoothEnergy);
+        if (next === renderProfile) { liveTierCand = null; return; }
+        if (next !== liveTierCand) { liveTierCand = next; liveTierCandSince = tSec; return; }
+        if (tSec - liveTierCandSince >= 0.35) { // candidate held steady -> commit
+          renderProfile = next;
+          gStagger = CHAR_STAGGER * (next === "A" ? 1.9 : next === "D" ? 0.45 : next === "C" ? 0.6 : 1);
+          liveTierCand = null;
+        }
+      }
+      // Resolve the profile for a new lyric line. Authoritative tempo (dictionary/
+      // API) locks for the whole track; otherwise use the live-followed tier.
       function resolveTrackProfile() {
         if (lockedProfile) return lockedProfile;
-        const bpm = Number.isFinite(trackBpmOverride) && trackBpmOverride > 0 ? trackBpmOverride : dspBpm;
-        return lockProfile(profileFromBpm(bpm, smoothEnergy), bpm);
+        if (Number.isFinite(trackBpmOverride) && trackBpmOverride > 0)
+          return lockProfile(profileFromBpm(trackBpmOverride, smoothEnergy), trackBpmOverride);
+        return renderProfile;
       }
 
       // Per-profile kinetic intensity — gentle/slow for calm, fast/erratic for
@@ -816,12 +841,25 @@
       // §6 — live DSP features (smoothed) for the vibe classifier.
       let dspBassTreble = 1; // bass/treble energy ratio (>1 = bass-heavy)
       let dspOnsetRate = 0;  // detected onsets per second (rolling)
-      let dspBpm = 0;        // octave-corrected tempo estimate (final)
-      let dspBpmRaw = 0;     // pre-correction smoothed inter-onset estimate
+      let dspBpm = 0;        // octave-corrected tempo estimate (final), from tempoEstimator
+      let dspBpmRaw = 0;     // modal inter-onset estimate (pre-comb), from tempoEstimator
       let energyDev = 0;     // rolling mean-deviation of the onset envelope (dynamic threshold)
       let beatEnergyAvg = 0; // §6 rolling avg of the LOW-PASSED beat envelope (kick transients)
       const onsetTimes = []; // recent onset timestamps (sec)
       let lastOnsetSec = -1;
+      // Robust tempo inference: a decaying inter-onset-interval histogram read out
+      // by a harmonic comb (see bpm-estimator.js). Replaces the old EMA-of-gaps,
+      // which smeared high tempos toward half-tempo (the "BPM reads under 70" bug).
+      const tempoEstimator = BpmEstimator.createTempoEstimator();
+
+      // ── DSP/BPM DIAGNOSTICS ────────────────────────────────────────────────
+      // Set false to silence. Logs the live pipeline (loopback -> onsets ->
+      // estimator -> tier) at ~1 Hz; main.js mirrors renderer console to its
+      // stdout, so `npm start` shows these in the terminal. The on-screen status
+      // bar also shows the live numbers so a packaged build needs no console.
+      const DSP_DEBUG = true;
+      let dspLogLastMs = 0;
+      console.log("[CotoLyrics] renderer build: dspBpm-v2 (comb estimator + live tier + diagnostics) loaded");
       const DYN_ONSET_K = 1.6;       // onset fires when energy-energyAvg > K*energyDev (dynamic, not static)
       const MIN_ONSET_MARGIN = 0.05; // floor so near-silence never self-triggers
       const ONSET_DEBOUNCE = 0.11;   // s min gap between onsets (~max 540/min -> captures fast subdivisions)
@@ -852,44 +890,78 @@
         window.addEventListener("keydown", h);
       })();
 
+      // Build the analyser graph from a captured audio MediaStream: a full-spectrum
+      // analyser (energy/shake) + a 160 Hz lowpass beat analyser (kick onsets). The
+      // stream is NEVER routed to destination — it already IS device audio, so that
+      // would echo. Shared by both capture paths below.
+      function wireAnalyser(audioStream, sourceLabel) {
+        const Ctx = window.AudioContext || window.webkitAudioContext;
+        audioCtx = new Ctx();
+        const src = audioCtx.createMediaStreamSource(audioStream);
+        analyser = audioCtx.createAnalyser();
+        analyser.fftSize = 1024;
+        timeData = new Uint8Array(analyser.fftSize);
+        freqData = new Uint8Array(analyser.frequencyBinCount);
+        src.connect(analyser);
+        try {
+          const lp = audioCtx.createBiquadFilter();
+          lp.type = "lowpass"; lp.frequency.value = 160; lp.Q.value = 0.7; // kick fundamentals
+          beatAnalyser = audioCtx.createAnalyser();
+          beatAnalyser.fftSize = 1024;
+          beatTime = new Uint8Array(beatAnalyser.fftSize);
+          src.connect(lp); lp.connect(beatAnalyser);
+        } catch (_) { beatAnalyser = null; }
+        resumeAudioContext();
+        console.log(`[DSP] capture ACTIVE via ${sourceLabel} — analyser + 160Hz beat filter live.`);
+      }
+
+      // System-audio capture WITHOUT a manual "share audio" picker, two ways:
+      //   PATH 1  a loopback INPUT device (VB-Cable / Stereo Mix / VoiceMeeter /
+      //           "What U Hear") via getUserMedia — no picker, and independent of
+      //           Chromium's WASAPI loopback (which some audio-driver stacks, e.g.
+      //           Equalizer APO, break). Auto-selected by device label.
+      //   PATH 2  system loopback via getDisplayMedia — the main process auto-
+      //           answers the request with audio:'loopback' (no picker). Used when
+      //           no loopback input device exists and the driver allows loopback.
+      const LOOPBACK_DEVICE_RE = /cable output|stereo mix|voicemeeter|what ?u ?hear|loopback|wave ?out|\bmix\b/i;
       async function startLoopback() {
         if (loopbackTried) return; loopbackTried = true;
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) return;
+        if (!navigator.mediaDevices) { console.warn("[DSP] mediaDevices unavailable -> dspBpm cannot run."); return; }
+
+        // PATH 1 — loopback input device.
+        try {
+          let devices = await navigator.mediaDevices.enumerateDevices();
+          if (!devices.some((d) => d.kind === "audioinput" && d.label)) {
+            // Labels are hidden until an audio capture is granted once; unlock them.
+            try { const tmp = await navigator.mediaDevices.getUserMedia({ audio: true }); tmp.getTracks().forEach((t) => t.stop()); } catch (_) {}
+            devices = await navigator.mediaDevices.enumerateDevices();
+          }
+          const matches = devices.filter((d) => d.kind === "audioinput" && LOOPBACK_DEVICE_RE.test(d.label || ""));
+          // Prefer a concrete device over the "default"/"communications" aliases so
+          // the binding survives a default-device change.
+          const dev = matches.find((d) => d.deviceId !== "default" && d.deviceId !== "communications") || matches[0];
+          if (dev) {
+            console.log("[DSP] PATH 1: loopback input device found -> " + dev.label);
+            const stream = await navigator.mediaDevices.getUserMedia({
+              audio: { deviceId: { exact: dev.deviceId }, echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+            });
+            wireAnalyser(stream, "loopback device '" + dev.label + "'");
+            return;
+          }
+          console.log("[DSP] PATH 1: no loopback input device; trying system loopback (PATH 2).");
+        } catch (e) { console.warn("[DSP] PATH 1 failed (" + (e && e.name) + "): " + (e && e.message) + " -> trying PATH 2."); }
+
+        // PATH 2 — system loopback via getDisplayMedia (handler auto-answers, no picker).
+        if (!navigator.mediaDevices.getDisplayMedia) { console.warn("[DSP] getDisplayMedia unavailable -> dspBpm stays 0."); return; }
         try {
           const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: true });
           stream.getVideoTracks().forEach((t) => t.stop());
           const at = stream.getAudioTracks();
-          if (!at.length) { stream.getTracks().forEach((t) => t.stop()); return; }
-          const Ctx = window.AudioContext || window.webkitAudioContext;
-          audioCtx = new Ctx();
-          const src = audioCtx.createMediaStreamSource(new MediaStream(at));
-          analyser = audioCtx.createAnalyser();
-          analyser.fftSize = 1024;
-          timeData = new Uint8Array(analyser.fftSize);
-          freqData = new Uint8Array(analyser.frequencyBinCount); // §6 spectrum DSP
-          // ISOLATED: connect the loopback ONLY to the analyser. We deliberately
-          // do NOT call src.connect(audioCtx.destination) — the loopback stream
-          // already IS the speaker output, so routing it back to destination
-          // would feed the speakers into themselves (echo). UxPlay plays the
-          // AirPlay audio out the default device on its own.
-          src.connect(analyser);
-          // §6 — DEDICATED BEAT ANALYSER. A BiquadFilter lowpass (~160 Hz) strips
-          // vocals/synths/hats so only kick + sub-bass transients survive; that
-          // clean rhythmic signal drives onset detection. The MAIN analyser above
-          // stays full-spectrum so energy/shake visuals keep their highs.
-          try {
-            const lp = audioCtx.createBiquadFilter();
-            lp.type = "lowpass";
-            lp.frequency.value = 160; // 150-200 Hz band: kick fundamentals
-            lp.Q.value = 0.7;
-            beatAnalyser = audioCtx.createAnalyser();
-            beatAnalyser.fftSize = 1024;
-            beatTime = new Uint8Array(beatAnalyser.fftSize);
-            src.connect(lp); lp.connect(beatAnalyser);
-          } catch (_) { beatAnalyser = null; } // fall back to full-spectrum onset detection
-          resumeAudioContext(); // un-idle the analyser the moment the graph exists
+          if (!at.length) { console.warn("[DSP] PATH 2: no audio track (driver blocked loopback) -> dspBpm stays 0."); stream.getTracks().forEach((t) => t.stop()); return; }
+          wireAnalyser(new MediaStream(at), "system loopback (getDisplayMedia)");
         } catch (e) {
-          console.warn("loopback unavailable:", e && e.message);
+          console.warn("[DSP] PATH 2 failed (" + (e && e.name) + "): " + (e && e.message) +
+            " — system audio could not be captured. dspBpm will stay 0.");
         }
       }
       function readEnergy() {
@@ -939,30 +1011,19 @@
         energyDev += (Math.abs(beatNow - beatAvg) - energyDev) * 0.05;
         const dynMargin = Math.max(MIN_ONSET_MARGIN, DYN_ONSET_K * energyDev);
         if (beatNow - beatAvg > dynMargin && (lastOnsetSec < 0 || tSec - lastOnsetSec > ONSET_DEBOUNCE)) {
-          if (lastOnsetSec > 0) {
-            const iv = tSec - lastOnsetSec;
-            if (iv > 0.20 && iv < 2) { // ~30..300 BPM plausibility window
-              const raw = 60 / iv;
-              dspBpmRaw = dspBpmRaw > 0 ? dspBpmRaw * 0.7 + raw * 0.3 : raw;
-            }
-          }
+          tempoEstimator.addOnset(tSec); // feed the histogram+comb tempo estimator
           lastOnsetSec = tSec;
           onsetTimes.push(tSec);
         }
         while (onsetTimes.length && tSec - onsetTimes[0] > 4) onsetTimes.shift();
         dspOnsetRate = onsetTimes.length / 4;
 
-        // ── SUB-HARMONIC DOUBLE-TIME CORRECTION ─────────────────────────────
-        // A smoothed estimate below ~90 BPM is often a half-tempo (octave) error.
-        // If transients are arriving FASTER than the detected beat (sustained
-        // density over the rolling 4s window exceeds 1.5x the beat), the true
-        // tempo is double — snap it up (69->138). A genuinely slow track has
-        // sparse onsets, fails the density test, and is left untouched. Finally
-        // clamp into a plausible band so we never invent an extreme tempo.
-        let corrected = dspBpmRaw;
-        if (corrected > 0 && corrected < 90 && dspOnsetRate * 60 > corrected * 1.5) corrected *= 2;
-        if (corrected > 0) corrected = Math.min(210, Math.max(50, corrected));
-        dspBpm = corrected;
+        // Octave correction now lives INSIDE the estimator (harmonic comb +
+        // perceptual resonance), so missed beats are credited back to the true
+        // tempo instead of dragging an average toward half-tempo. Just read out.
+        const tEst = tempoEstimator.estimate(tSec);
+        dspBpm = tEst.bpm;
+        dspBpmRaw = tEst.raw;
       }
 
       // §learn — when dspBpm settles for a track with NO authoritative tempo,
@@ -1064,6 +1125,12 @@
         smoothEnergy = smoothEnergy + (energy - smoothEnergy) * (1 - Math.exp(-1.5 * dt));
         if (energy - energyAvg > 0.12) shakeEnv = 1; else shakeEnv = Math.max(0, shakeEnv - dt * 3.2);
         readDsp(tSec); // §6 spectrum/onset/BPM features
+        updateLiveProfile(tSec); // follow the live tempo tier (until authoritatively locked)
+        if (DSP_DEBUG && nowMs - dspLogLastMs > 1000) { // ~1 Hz pipeline trace
+          dspLogLastMs = nowMs;
+          const est = tempoEstimator.estimate(tSec);
+          console.log(`[DSP] bpm=${dspBpm} raw=${dspBpmRaw} rate=${est.onsetRate.toFixed(1)}/s onsets4s=${onsetTimes.length} energy=${energy.toFixed(3)} avg=${energyAvg.toFixed(3)} tier=${renderProfile} loop=${analyser ? "on" : "OFF"} override=${trackBpmOverride || "-"}`);
+        }
         try { maybeLearnBpm(tSec); } catch (e) { /* §3 — never let the learn hook halt the frame loop */ }
         latestMotion = moodToMotion(sampleMood({ energy }, 0));
 
@@ -1391,6 +1458,8 @@
         if (hasTrack && key !== curTrackKey) {
           curTrackKey = key; curTrack = { title, artist, album };
           learnedThisTrack = false; dspStableSince = 0; dspStableVal = 0; // §learn — re-arm per track
+          tempoEstimator.reset(); lastOnsetSec = -1; onsetTimes.length = 0; // clear tempo state so the old track can't bleed in
+          dspBpm = 0; dspBpmRaw = 0; liveTierCand = null; renderProfile = "B"; // reset the live tier to neutral until the new estimate settles
           songTitleEl.textContent = (title || "—").toUpperCase();
           songArtistEl.textContent = artist || "—";
           phrases = []; trackLyricIntensity = 0;
@@ -1425,11 +1494,20 @@
           startPrompt.style.display = "none";
           songInfo.classList.add("visible");
         }
-        // Show the locked BPM tier (verifies the 3-tier engine is live). lockedBpm
-        // is the genuine dictionary/API tempo when known, else the live estimate.
-        const tier = everLocked
-          ? ` · ${Math.round(lockedBpm) || "~"}bpm ${TIER_NAMES[renderProfile] || renderProfile}`
-          : "";
+        // BPM readout — ALWAYS shown so the live tempo engine is visible without a
+        // console (and confirms this build is running). Authoritative tempo
+        // (dictionary/API) shows "Npbm Tier"; the live estimate shows the modal
+        // `raw` + onset rate too, so a half-tempo detection (e.g. 184 reading 92)
+        // or a dead loopback (0bpm, 0/s) is obvious at a glance.
+        const authoritative = Number.isFinite(trackBpmOverride) && trackBpmOverride > 0;
+        let tier;
+        if (authoritative) {
+          tier = ` · ${Math.round(trackBpmOverride)}bpm ${TIER_NAMES[renderProfile] || renderProfile}`;
+        } else {
+          const rate = analyser ? (tempoEstimator.estimate(performance.now() / 1000).onsetRate || 0) : 0;
+          const lbl = dspBpm > 0 ? TIER_NAMES[renderProfile] || renderProfile : (analyser ? "listening" : "no audio");
+          tier = ` · ~${dspBpm || 0}bpm ${lbl} (raw ${dspBpmRaw || 0}, ${rate.toFixed(1)}/s)`;
+        }
         setStatus((playing ? "Playing" : "Paused") + " · SMTC" + tier);
       }
       function resetLyricState() {

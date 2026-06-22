@@ -35,6 +35,26 @@ const fsp = require("fs").promises;
 const { spawn } = require("child_process");
 const { pathToFileURL } = require("url");
 const musicDb = require("./music-database"); // sandboxed local SQLite BPM store (guarded load)
+const { scrapeBpmViaHiddenWindow } = require("./getsongbpm"); // Layer 2 hidden-window scraper
+
+/* ── .env loader (dependency-free) ─────────────────────────────────────────
+ * Parse simple KEY=VALUE lines from a gitignored .env at the project root into
+ * process.env (only when not already set), so secrets like GETSONGBPM_KEY never
+ * have to live in tracked source. A missing file is the normal case (no key) and
+ * is silently ignored. NOTE: in a PACKAGED build __dirname is inside the asar and
+ * the .env is NOT bundled (by design — the key must not ship), so packaged users
+ * set a real environment variable instead; dev (`npm start`) reads .env here. */
+(function loadDotEnv() {
+  try {
+    const txt = require("fs").readFileSync(require("path").join(__dirname, ".env"), "utf8");
+    for (const line of txt.split(/\r?\n/)) {
+      const m = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/.exec(line);
+      if (!m || line.trim().startsWith("#")) continue;
+      const key = m[1];
+      if (!(key in process.env)) process.env[key] = m[2].replace(/^["']|["']$/g, "");
+    }
+  } catch (_) { /* no .env -> rely on real environment variables */ }
+})();
 
 const APP_SCHEME = "app";
 const APP_HOST = "bundle";
@@ -270,12 +290,17 @@ function startMassiveIngest(inputFilePath, opts) {
 // Set GETSONGBPM_KEY in your environment or a gitignored .env to enable it.
 const GETSONGBPM_KEY = process.env.GETSONGBPM_KEY || "";
 
-// LAYER 2 hidden-window scraper toggle. DEFAULT OFF — tested on this machine,
-// api.getsongbpm.com stays stuck on Cloudflare's "Just a moment" interstitial
-// indefinitely (it never clears), so the scraper only burns its ~6.5s timeout
-// before falling back. The code is kept for the future; flip to true to retry
-// (e.g. if Cloudflare eases, or you wire a pre-cleared cf_clearance cookie).
-const ENABLE_BPM_SCRAPER = false;
+// LAYER 2 hidden-window scraper toggle. DEFAULT ON when a key is present.
+// api.getsongbpm.com sits behind a Cloudflare MANAGED challenge ("Just a
+// moment…", Cf-Mitigated: challenge) that 403s any client which can't execute
+// the challenge JS — so net.fetch / curl are hard-blocked, but a real hidden
+// Chromium window DOES clear it (measured: ~15 s cold, then instant while the
+// cf_clearance cookie persists in the default session, even across restarts).
+// The earlier "stuck forever" diagnosis was really a 6.5 s timeout bailing
+// before the ~15 s solve (now SCRAPER_TIMEOUT_MS). Cloudflare can still escalate
+// to a CAPTCHA / loop under rapid repeated hits; per-track spaced lookups + the
+// renderer's live dspBpm fallback keep that from ever hanging playback.
+const ENABLE_BPM_SCRAPER = true;
 
 // Fuzzy metadata cleaner for open-source libraries with unpredictable tagging.
 // Lowercases and strips noise tags so lookups are stable. Regexes are the
@@ -309,29 +334,8 @@ function lookupTempoLocal(title, artist) {
   return Number.isFinite(bpm) ? bpm : null;
 }
 
-// Defensive tempo extraction. GetSongBPM's real shape is `search[0].tempo` (a
-// STRING), but we scan a list of candidate accessors — real path first, then the
-// common generic names — so an API shape change or an unexpected payload can't
-// silently yield undefined/NaN. Returns a positive integer BPM, or NaN.
-const BPM_PROPERTY_ACCESSORS = [
-  (d) => d && d.search && d.search[0] && d.search[0].tempo, // GetSongBPM (real)
-  (d) => d && d.search && d.search[0] && d.search[0].bpm,
-  (d) => Array.isArray(d) && d[0] && (d[0].tempo ?? d[0].bpm), // data[0].bpm / .tempo
-  (d) => d && d.tempo,     // data.tempo
-  (d) => d && d.bpm,       // data.bpm
-  (d) => d && d.song_bpm,  // data.song_bpm
-];
-
-function extractTempoFromPayload(data) {
-  for (const accessor of BPM_PROPERTY_ACCESSORS) {
-    let raw;
-    try { raw = accessor(data); } catch (_) { continue; }
-    if (raw === undefined || raw === null || raw === "") continue;
-    const parsedBpm = parseInt(raw, 10); // strict force-cast (handles "174" strings)
-    if (!isNaN(parsedBpm) && parsedBpm > 0) return parsedBpm;
-  }
-  return NaN;
-}
+// (Layer-2 tempo extraction + the hidden-window scraper now live in
+// ./getsongbpm.js so the parser is unit-testable in plain Node.)
 
 /* ── MUSICBRAINZ RELEASE-YEAR LOOKUP (year ONLY; no Spotify token, no API key) ─
  * On-demand metadata loop inspired by the approach in L3N0X's spicetify-dj-info
@@ -380,102 +384,27 @@ async function fetchYearFromMusicBrainz(title, artist) {
   }
 }
 
-// LAYER 2 (network) — hidden-BrowserWindow scrape (Option 2). A real Chromium
-// window runs Cloudflare's PASSIVE JS challenge (which net.fetch can't), then we
-// read the JSON the API returns and feed it through the same defensive scanner.
-// We NEVER solve interactive CAPTCHAs — if one appears we bail and fall back.
-// ToS-gray; personal use, and GetSongBPM's attribution-backlink requirement
-// still applies. Resolves to a positive int BPM, or null on 403 / CAPTCHA /
-// timeout / any error (the caller then defers to the renderer's dspBpm).
-const SCRAPER_TIMEOUT_MS = 6500; // 5–7s budget so a stuck wall never hangs lookups
+// LAYER 2 budget. Cloudflare's managed challenge clears in ~15 s cold (measured),
+// so the timeout must comfortably exceed that; a genuinely looping wall still
+// can't hang playback because the renderer's live dspBpm runs meanwhile.
+const SCRAPER_TIMEOUT_MS = 22000;
 
-function scrapeBpmViaHiddenWindow(sanitizedTitle, sanitizedArtist) {
-  return new Promise((resolve) => {
-    if (!GETSONGBPM_KEY) return resolve(null);
-    const lookup = encodeURIComponent(`song:${sanitizedTitle} artist:${sanitizedArtist}`);
-    const url = `https://api.getsongbpm.com/search/?api_key=${GETSONGBPM_KEY}&type=both&lookup=${lookup}`;
-    const UA =
-      "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
+// CLOUDFLARE BACK-OFF BREAKER. Deep testing showed the managed challenge clears
+// once cold, then escalates to a persistent loop under repeated automated hits.
+// To avoid spawning doomed ~22 s windows in that state, we pause GetSongBPM after
+// a couple of consecutive BLOCKED attempts (timeout/captcha); any clear (ok/miss
+// = API reachable) resets the streak. A "miss" does NOT count as blocked — the
+// API answered, the song just isn't in their DB.
+const SCRAPE_FAIL_LIMIT = 2;
+const SCRAPE_COOLDOWN_MS = 15 * 60 * 1000; // pause window after the breaker trips
+let scrapeBlockStreak = 0;
+let scrapeCooldownUntil = 0;
 
-    console.log("[Network Request] Querying GetSongBPM (hidden window) for: " + sanitizedTitle);
-
-    let win = new BrowserWindow({
-      show: false, // invisible — never appears or steals focus
-      width: 800,
-      height: 600,
-      webPreferences: {
-        images: false, // text-only -> conserve CPU/RAM
-        nodeIntegration: false,
-        contextIsolation: true,
-        sandbox: true,
-      },
-    });
-    win.webContents.setAudioMuted(true);
-
-    let done = false;
-    let poll = null;
-    let timer = null;
-    const finish = (bpm) => {
-      if (done) return;
-      done = true;
-      if (poll) clearInterval(poll);
-      if (timer) clearTimeout(timer);
-      if (win && !win.isDestroyed()) {
-        try { win.destroy(); } catch (_) {} // close the hidden window -> no leak
-      }
-      win = null;
-      resolve(Number.isFinite(bpm) && bpm > 0 ? bpm : null);
-    };
-
-    // Hard 5–7s timeout so a stuck Cloudflare/CAPTCHA wall can't hang the lookup.
-    timer = setTimeout(() => {
-      console.warn("[Scraper] timed out clearing Cloudflare -> local fallback.");
-      finish(null);
-    }, SCRAPER_TIMEOUT_MS);
-
-    // Prefer the <pre> Chromium wraps raw JSON in; else the body text.
-    const READ_JS =
-      "(function(){var p=document.querySelector('pre');return p?p.innerText:(document.body?document.body.innerText:'');})()";
-
-    const tryRead = async () => {
-      if (done || !win || win.isDestroyed()) return;
-      let text = "";
-      try { text = await win.webContents.executeJavaScript(READ_JS, true); } catch (_) { return; }
-      if (!text) return;
-      if (/cf-turnstile|verify you are human|complete the captcha|recaptcha/i.test(text)) {
-        console.warn("[Scraper] interactive CAPTCHA wall (will not solve) -> local fallback.");
-        return finish(null);
-      }
-      if (/just a moment|checking your browser|enable javascript and cookies/i.test(text)) {
-        return; // passive challenge still running -> keep polling through its reloads
-      }
-      const brace = text.indexOf("{");
-      if (brace < 0) return;
-      let data;
-      try { data = JSON.parse(text.slice(brace)); } catch (_) { return; } // partial -> keep polling
-      console.log("[Network Response] Raw Payload: " + JSON.stringify(data));
-      finish(extractTempoFromPayload(data));
-    };
-
-    win.webContents.on("did-finish-load", tryRead);
-    win.webContents.on("did-fail-load", (_e, code, desc) => {
-      if (code === -3) return; // ERR_ABORTED fires on Cloudflare's own redirects — ignore
-      console.warn(`[Scraper] load failed (${code} ${desc}) -> local fallback.`);
-      finish(null);
-    });
-    poll = setInterval(tryRead, 500); // Cloudflare reloads a few times; poll independently
-
-    win.loadURL(url, { userAgent: UA }).catch((e) => {
-      console.warn("[Scraper] loadURL error: " + (e && e.message ? e.message : e) + " -> local fallback.");
-      finish(null);
-    });
-  });
-}
-
-// Waterfall on the SANITIZED metadata: keyword gate -> dictionary -> SQLite
-// cache -> (optional GetSongBPM scrape, off) -> null. NO network in this hot
-// path; unknown tracks fall to the renderer's live dspBpm, which writes its
-// verified tempo back into the SQLite cache (see the learn-bpm handler).
+// Waterfall on the SANITIZED metadata: dictionary -> SQLite cache -> GetSongBPM
+// scrape -> null. Layers 1a/1c are instant + offline; only an UNKNOWN track
+// reaches Layer 2 (one hidden-window lookup, ~15 s cold then cached). A null
+// here means the renderer's live dspBpm takes over and writes its own estimate
+// back via learn-bpm, so playback never blocks on the network.
 async function resolveBpm(title, artist) {
   const s = sanitizeTrackMetadata(title, artist);
   // LAYER 1a — local dictionary (sanitized key). Checked BEFORE any scraper: a
@@ -486,16 +415,29 @@ async function resolveBpm(title, artist) {
   // hit; disabled-safe (returns null when better-sqlite3 isn't loaded).
   const cached = musicDb.getBpm(title, artist);
   if (cached && Number.isFinite(cached.bpm)) return { bpm: cached.bpm, year: cached.year, source: "sqlite-cache" };
-  // (No network BPM layer: tempo for unknown tracks comes from the renderer's
-  // live dspBpm estimator, which writes back to this SQLite cache via the
-  // learn-bpm handler. The SMTC hot path stays 100% local and instant.)
-  // LAYER 2 — hidden-window scrape past Cloudflare (Option 2). OFF by default
-  // (Cloudflare-blocked; see ENABLE_BPM_SCRAPER). When enabled, returns null on
-  // 403 / CAPTCHA / timeout -> the renderer's live dspBpm (Option 1) takes over.
-  if (ENABLE_BPM_SCRAPER) {
-    const web = await scrapeBpmViaHiddenWindow(s.title, s.artist);
+  // LAYER 2 — GetSongBPM via a hidden Chromium window (the only client that
+  // clears its Cloudflare managed challenge; net.fetch is hard-403'd). On a hit
+  // we PERSIST to both stores (dictionary.json + SQLite, with a best-effort
+  // release year) so this song is a 100% offline hit forever after. On a
+  // 403 / CAPTCHA / timeout the scraper returns null -> live dspBpm takes over.
+  if (ENABLE_BPM_SCRAPER && GETSONGBPM_KEY && Date.now() >= scrapeCooldownUntil) {
+    const { bpm: web, status } = await scrapeBpmViaHiddenWindow(
+      BrowserWindow, GETSONGBPM_KEY, s.title, s.artist, { timeoutMs: SCRAPER_TIMEOUT_MS });
+    // Breaker bookkeeping: ok/miss = Cloudflare reachable (reset); timeout/captcha
+    // = blocked (count, and pause scraping once the streak hits the limit).
+    if (status === "ok" || status === "miss") {
+      scrapeBlockStreak = 0;
+    } else if (status === "timeout" || status === "captcha") {
+      if (++scrapeBlockStreak >= SCRAPE_FAIL_LIMIT) {
+        scrapeCooldownUntil = Date.now() + SCRAPE_COOLDOWN_MS;
+        scrapeBlockStreak = 0;
+        console.warn(`[Scraper] Cloudflare blocking (${status}) — pausing GetSongBPM ${SCRAPE_COOLDOWN_MS / 60000} min; live dspBpm only.`);
+      }
+    }
     if (Number.isFinite(web)) {
-      BPM_DICTIONARY[tempoKey(title, artist)] = web; // cache -> never scrape this song again
+      persistLearnedBpm(title, artist, web); // -> BPM_DICTIONARY + bpm-dictionary.json
+      const save = (year) => { try { musicDb.putMany([{ title, artist, bpm: web, year }]); } catch (_) {} };
+      fetchYearFromMusicBrainz(s.title, s.artist).then(save, () => save(null)); // best-effort, fire-and-forget
       return { bpm: web, source: "getsongbpm-scrape" };
     }
   }
@@ -582,6 +524,18 @@ function createWindow() {
   });
 
   mainWindow.setMenuBarVisibility(false);
+
+  // Mirror renderer console to the main-process stdout so `npm start` shows the
+  // live DSP/BPM diagnostics (and any renderer error) in the terminal — the
+  // renderer's own DevTools console is otherwise invisible to a CLI launch.
+  // Forwards our [DSP]/[BPM]/[CotoLyrics] traces plus all warnings/errors.
+  mainWindow.webContents.on("console-message", (_e, level, message) => {
+    if (level >= 2 || /^\[(DSP|BPM|CotoLyrics)\b/.test(message)) {
+      const tag = level >= 3 ? "ERROR" : level === 2 ? "warn" : "log";
+      console.log(`[renderer:${tag}] ${message}`);
+    }
+  });
+
   mainWindow.loadURL(`${APP_SCHEME}://${APP_HOST}/index.html`);
   mainWindow.on("closed", () => {
     mainWindow = null;

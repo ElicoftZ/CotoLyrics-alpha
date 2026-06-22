@@ -7,7 +7,10 @@
     "start": "electron .",
     "build": "electron-builder",
     "dist:portable": "electron-builder --win portable",
-    "rebuild": "npx --yes @electron/rebuild -o better-sqlite3"
+    "rebuild": "npx --yes @electron/rebuild -o better-sqlite3",
+    "test": "node test/bpm-estimator.test.js && node test/getsongbpm.unit.test.js",
+    "test:api": "node test/getsongbpm.unit.test.js",
+    "test:api:live": "electron test/getsongbpm.live.test.js"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
@@ -24,6 +27,8 @@
       "main.js",
       "preload.js",
       "index.html",
+      "bpm-estimator.js",
+      "getsongbpm.js",
       "mood-engine.js",
       "music-database.js",
       "db-ingest-worker.js",

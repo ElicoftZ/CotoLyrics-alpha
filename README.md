@@ -96,13 +96,28 @@ Keys are lowercase `title|artist`; the app sanitizes incoming metadata (strips
 ### Optional online BPM lookup (GetSongBPM)
 
 For songs not in your dictionary, the app can optionally look up the tempo over the
-network. Get a free API key from [getsongbpm.com](https://getsongbpm.com/api) and set
-it as an environment variable (so no key is ever committed):
+network. Get a free API key from [getsongbpm.com](https://getsongbpm.com/api). The key
+is read from the environment **only** so it is never committed — set it either as a real
+environment variable, or in a gitignored `.env` file at the project root (read at
+startup by `main.js`; preferred for `npm start`):
 
 ```bash
-set GETSONGBPM_KEY=your_api_key_here      # Windows (cmd)
-$env:GETSONGBPM_KEY="your_api_key_here"   # Windows (PowerShell)
+# .env (gitignored — never commit)
+GETSONGBPM_KEY=your_api_key_here
 ```
+
+```bash
+set GETSONGBPM_KEY=your_api_key_here      # or, Windows (cmd)
+$env:GETSONGBPM_KEY="your_api_key_here"   # or, Windows (PowerShell)
+```
+
+> **Cloudflare note.** `api.getsongbpm.com` sits behind a Cloudflare *managed
+> challenge*. Plain HTTP clients (`fetch`/`curl`) are hard-blocked (403), so the app
+> clears the challenge in a hidden Chromium window (~15 s the first time, then cached).
+> Cloudflare can still escalate to a loop under repeated lookups; the app backs off
+> automatically and falls back to the live `dspBpm` estimate, so playback never stalls.
+> A packaged build does **not** bundle `.env` (the key must not ship) — set a real
+> environment variable for packaged use.
 
 With no key set, the app falls back to estimating tempo live from the audio.
 
