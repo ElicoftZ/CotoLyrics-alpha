@@ -19,7 +19,7 @@ app and CotoLyrics does the rest.
 - **Beat-aware animation:** the tempo is resolved per track and locked to one of
   three motion profiles (calm → groovy → intense).
 - **Live audio analysis** of system loopback drives the beat/energy reactions.
-- **(Optional) BPM detection & animation**, BPM data powered by GetSongBPM
+- **Genre-aware letter animation** — genre detected keyless via iTunes (optional Last.fm).
 
 ---
 
@@ -93,33 +93,24 @@ const BPM_DICTIONARY = {
 Keys are lowercase `title|artist`; the app sanitizes incoming metadata (strips
 `(Remix)`, `- Remastered`, etc.) before matching.
 
-### Optional online BPM lookup (GetSongBPM)
+For songs not in your dictionary, the app estimates tempo live from the system audio
+(the `dspBpm` onset estimator) and learns it back into the local cache, so the next
+play is an instant offline hit. No API key or network lookup is involved.
 
-For songs not in your dictionary, the app can optionally look up the tempo over the
-network. Get a free API key from [getsongbpm.com](https://getsongbpm.com/api). The key
-is read from the environment **only** so it is never committed — set it either as a real
-environment variable, or in a gitignored `.env` file at the project root (read at
-startup by `main.js`; preferred for `npm start`):
+### Genre detection & per-letter animation
 
-```bash
-# .env (gitignored — never commit)
-GETSONGBPM_KEY=your_api_key_here
-```
+Each track's genre drives a letter-by-letter appear/disappear animation. Genre is
+detected **keyless by default** via Apple's iTunes Search API (`primaryGenreName`), so
+it works out of the box with no setup. Optionally, set a free
+[Last.fm](https://www.last.fm/api/account/create) API key for richer subgenre tags:
 
 ```bash
-set GETSONGBPM_KEY=your_api_key_here      # or, Windows (cmd)
-$env:GETSONGBPM_KEY="your_api_key_here"   # or, Windows (PowerShell)
+# .env (gitignored — never commit). OPTIONAL — leave empty to use iTunes only.
+LASTFM_API_KEY=your_api_key_here
 ```
 
-> **Cloudflare note.** `api.getsongbpm.com` sits behind a Cloudflare *managed
-> challenge*. Plain HTTP clients (`fetch`/`curl`) are hard-blocked (403), so the app
-> clears the challenge in a hidden Chromium window (~15 s the first time, then cached).
-> Cloudflare can still escalate to a loop under repeated lookups; the app backs off
-> automatically and falls back to the live `dspBpm` estimate, so playback never stalls.
-> A packaged build does **not** bundle `.env` (the key must not ship) — set a real
-> environment variable for packaged use.
-
-With no key set, the app falls back to estimating tempo live from the audio.
+When a Last.fm key is present it is tried first (more granular subgenres); otherwise the
+app falls back to the keyless iTunes lookup.
 
 ### Hand-authored lyric timing (optional)
 
@@ -150,8 +141,8 @@ npm run build           # full electron-builder output
 ## How it works
 
 - **`main.js`** — Electron main process. Serves the renderer over a custom `app://`
-  scheme, spawns the SMTC bridge, runs the multi-layer BPM waterfall
-  (dictionary → GetSongBPM → live estimate), and grants system-audio loopback.
+  scheme, spawns the SMTC bridge, runs the BPM waterfall (dictionary → SQLite cache →
+  live estimate), resolves the genre (iTunes/Last.fm), and grants system-audio loopback.
 - **`smtc-bridge.ps1`** — reads Windows "now playing" via WinRT and streams it to
   the app as JSON.
 - **`preload.js`** — the secure IPC bridge between main and renderer.

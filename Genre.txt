@@ -1,0 +1,51 @@
+Number, Music Genre,Text animation
+1,Pop,Bouncy
+2,Hip-Hop / Rap,Punchy
+3,Rock,Kinetic
+4,Electronic / EDM,Glitchy
+5,R&B,Smooth
+6,Country,Static
+7,Jazz,Swing
+8,Classical,Elegant
+9,Reggae,Swaying
+10,Metal,Chaotic
+11,Lo-Fi,Blur-Drifting
+12,Synthwave,Glow-Pulse
+13,Indie / Folk,Minimal
+14,Latin / Reggaeton,Rhythmic
+15,K-Pop / J-Pop,Flashy
+16,Punk,Jittery
+17,Blues,Soulful
+18,Soul / Funk,Groovy
+19,Ambient,Blur-Fading
+20,Disco,Sparkling
+21,Gospel,Rising
+22,Ska,Elastic
+23,Industrial,Mechanical
+24,Hyperpop,Spastic
+25,Orchestral Film,Cinematic
+26,Trap,Bass-Punchy
+27,Dubstep,Warp-Stretching
+28,Phonk,Drift-Glitchy
+29,Shoegaze,Motion-Blur
+30,Vaporwave,Dreamy-Glow
+31,Afrobeats,Bounce-Groovy
+32,Grime,Hard-Snapping
+33,Techno,Strobe-Pacing
+34,House,Fluid-Swaying
+35,Bluegrass,Rapid-Reveal
+36,Chiptune / 8-Bit,Pixel-Stepping
+37,Post-Rock,Swelling
+38,Acid Jazz,Fluid-Slide
+39,Grunge,Distorted-Jitter
+40,Mathematical Rock,Syncopated-Stop
+41,Emo,Slow-Fading
+42,Flamenco,Sharp-Clapping
+43,Bossa Nova,Gentle-Rolling
+44,Dark Ambient,Shadow-Blur
+45,Future Bass,Morph-Popping
+46,New Wave,Angular-Slide
+47,Celtic,Whimsical-Fading
+48,Cyberpunk,Matrix-Flicker
+49,Opera,Sweeping-Scale
+50,Ska Punk,Jump-Bouncy

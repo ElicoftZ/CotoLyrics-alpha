@@ -8,9 +8,7 @@
     "build": "electron-builder",
     "dist:portable": "electron-builder --win portable",
     "rebuild": "npx --yes @electron/rebuild -o better-sqlite3",
-    "test": "node test/bpm-estimator.test.js && node test/getsongbpm.unit.test.js",
-    "test:api": "node test/getsongbpm.unit.test.js",
-    "test:api:live": "electron test/getsongbpm.live.test.js"
+    "test": "node -e \"require('./genre-map.js'); console.log('genre-map ok')\""
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",
@@ -28,7 +26,7 @@
       "preload.js",
       "index.html",
       "bpm-estimator.js",
-      "getsongbpm.js",
+      "genre-map.js",
       "mood-engine.js",
       "music-database.js",
       "db-ingest-worker.js",

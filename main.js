@@ -35,15 +35,15 @@ const fsp = require("fs").promises;
 const { spawn } = require("child_process");
 const { pathToFileURL } = require("url");
 const musicDb = require("./music-database"); // sandboxed local SQLite BPM store (guarded load)
-const { scrapeBpmViaHiddenWindow } = require("./getsongbpm"); // Layer 2 hidden-window scraper
+const genreMap = require("./genre-map"); // genre-tag -> canonical-genre classifier
 
 /* ── .env loader (dependency-free) ─────────────────────────────────────────
  * Parse simple KEY=VALUE lines from a gitignored .env at the project root into
- * process.env (only when not already set), so secrets like GETSONGBPM_KEY never
- * have to live in tracked source. A missing file is the normal case (no key) and
- * is silently ignored. NOTE: in a PACKAGED build __dirname is inside the asar and
- * the .env is NOT bundled (by design — the key must not ship), so packaged users
- * set a real environment variable instead; dev (`npm start`) reads .env here. */
+ * process.env (only when not already set), so the OPTIONAL LASTFM_API_KEY never has
+ * to live in tracked source. A missing file is the normal case (genre detection works
+ * keyless via iTunes) and is silently ignored. NOTE: in a PACKAGED build __dirname is
+ * inside the asar and the .env is NOT bundled, so packaged users who want the optional
+ * Last.fm enrichment set a real environment variable; dev (`npm start`) reads .env. */
 (function loadDotEnv() {
   try {
     const txt = require("fs").readFileSync(require("path").join(__dirname, ".env"), "utf8");
@@ -142,6 +142,7 @@ function startSmtcBridge() {
         mainWindow.webContents.send("smtc-update", obj);
       }
       maybeResolveBpm(obj); // §1 — resolve + push BPM once per track over "bpm-update"
+      maybeResolveGenre(obj); // §genre — resolve + push genre once per track over "genre-update"
     }
   });
   ps.stderr.on("data", (d) => console.error("[smtc] " + d.toString().trim()));
@@ -167,15 +168,14 @@ function stopChildren() {
  * over the "bpm-update" IPC channel. The renderer maps it to a motion profile.
  *
  *   LAYER 1  Local dictionary + SQLite cache — instant, no network.
- *   LAYER 2  GetSongBPM scrape — OFF by default (Cloudflare-gated); kept behind
- *            ENABLE_BPM_SCRAPER. (Spotify /v1/audio-features is NOT used:
- *            deprecated for new apps on 2024-11-27, and this SMTC app holds no
- *            Spotify session token.)
- *   LAYER 3  Live dspBpm onset estimate — renderer (Web Audio): the PRIMARY
+ *   LAYER 2  Live dspBpm onset estimate — renderer (Web Audio): the PRIMARY
  *            tempo source for unknown tracks. Its settled estimate is shipped
  *            back over "learn-bpm" and written into the SQLite cache (with a
  *            best-effort MusicBrainz release year), so the track is local from
- *            then on. Steady-state playback makes zero network requests.        */
+ *            then on. Steady-state playback makes zero network requests.
+ *            (Spotify /v1/audio-features is NOT used — deprecated 2024-11-27 and
+ *            this SMTC app holds no Spotify token; a prior GetSongBPM scrape layer
+ *            was removed.)                                                       */
 
 // LAYER 1 - in-memory tempo dictionary. EMPTY in the public source: it is filled
 // at runtime from the user's local bpm-dictionary.json (below) and grows as the
@@ -267,6 +267,40 @@ ipcMain.handle("music-database:get-bpm", (_e, title, artist) => {
   try { return musicDb.getBpm(title, artist); } catch (_) { return null; }
 });
 
+// §settings — persist the user's uploaded lyrics font under userData so it
+// survives a restart. The raw bytes are written next to a tiny JSON that records
+// the display name + the file they were saved to (mirrors bpm-dictionary.json).
+function fontSettingsPath() { return path.join(app.getPath("userData"), "font-settings.json"); }
+
+ipcMain.handle("settings:save-font", async (_e, payload) => {
+  try {
+    if (!payload || !payload.bytes) return false;
+    const name = String(payload.name || "Custom font");
+    const ext = (name.match(/\.(otf|ttf)$/i) || [, "ttf"])[1].toLowerCase();
+    const fontFile = path.join(app.getPath("userData"), "custom-lyrics-font." + ext);
+    const bytes = Buffer.from(payload.bytes); // Uint8Array -> Buffer
+    await fsp.writeFile(fontFile, bytes);
+    await fsp.writeFile(fontSettingsPath(), JSON.stringify({ name, file: path.basename(fontFile) }, null, 2) + "\n", "utf8");
+    console.log(`[Font] Saved custom lyrics font "${name}" (${bytes.length} bytes).`);
+    return true;
+  } catch (err) {
+    console.warn("[Font] Save failed: " + (err && err.message ? err.message : err));
+    return false;
+  }
+});
+
+ipcMain.handle("settings:load-font", async () => {
+  try {
+    const meta = JSON.parse(await fsp.readFile(fontSettingsPath(), "utf8"));
+    if (!meta || !meta.file) return null;
+    const bytes = await fsp.readFile(path.join(app.getPath("userData"), meta.file));
+    return { name: meta.name || "Custom font", bytes }; // Buffer -> Uint8Array across the bridge
+  } catch (err) {
+    if (!(err && err.code === "ENOENT")) console.warn("[Font] Load failed: " + (err && err.message ? err.message : err));
+    return null;
+  }
+});
+
 // §2 — launch the heavy ingest in a utilityProcess so it never stalls the main
 // thread (SMTC bridge + lyric IPC stay responsive). Call from a menu/CLI hook.
 function startMassiveIngest(inputFilePath, opts) {
@@ -284,23 +318,6 @@ function startMassiveIngest(inputFilePath, opts) {
   });
   return worker;
 }
-
-// GetSongBPM API key. Read from the environment ONLY so no key ships in this
-// public source. "" disables the (off-by-default) GetSongBPM layer entirely.
-// Set GETSONGBPM_KEY in your environment or a gitignored .env to enable it.
-const GETSONGBPM_KEY = process.env.GETSONGBPM_KEY || "";
-
-// LAYER 2 hidden-window scraper toggle. DEFAULT ON when a key is present.
-// api.getsongbpm.com sits behind a Cloudflare MANAGED challenge ("Just a
-// moment…", Cf-Mitigated: challenge) that 403s any client which can't execute
-// the challenge JS — so net.fetch / curl are hard-blocked, but a real hidden
-// Chromium window DOES clear it (measured: ~15 s cold, then instant while the
-// cf_clearance cookie persists in the default session, even across restarts).
-// The earlier "stuck forever" diagnosis was really a 6.5 s timeout bailing
-// before the ~15 s solve (now SCRAPER_TIMEOUT_MS). Cloudflare can still escalate
-// to a CAPTCHA / loop under rapid repeated hits; per-track spaced lookups + the
-// renderer's live dspBpm fallback keep that from ever hanging playback.
-const ENABLE_BPM_SCRAPER = true;
 
 // Fuzzy metadata cleaner for open-source libraries with unpredictable tagging.
 // Lowercases and strips noise tags so lookups are stable. Regexes are the
@@ -333,9 +350,6 @@ function lookupTempoLocal(title, artist) {
   const bpm = BPM_DICTIONARY[tempoKey(title, artist)];
   return Number.isFinite(bpm) ? bpm : null;
 }
-
-// (Layer-2 tempo extraction + the hidden-window scraper now live in
-// ./getsongbpm.js so the parser is unit-testable in plain Node.)
 
 /* ── MUSICBRAINZ RELEASE-YEAR LOOKUP (year ONLY; no Spotify token, no API key) ─
  * On-demand metadata loop inspired by the approach in L3N0X's spicetify-dj-info
@@ -384,63 +398,19 @@ async function fetchYearFromMusicBrainz(title, artist) {
   }
 }
 
-// LAYER 2 budget. Cloudflare's managed challenge clears in ~15 s cold (measured),
-// so the timeout must comfortably exceed that; a genuinely looping wall still
-// can't hang playback because the renderer's live dspBpm runs meanwhile.
-const SCRAPER_TIMEOUT_MS = 22000;
-
-// CLOUDFLARE BACK-OFF BREAKER. Deep testing showed the managed challenge clears
-// once cold, then escalates to a persistent loop under repeated automated hits.
-// To avoid spawning doomed ~22 s windows in that state, we pause GetSongBPM after
-// a couple of consecutive BLOCKED attempts (timeout/captcha); any clear (ok/miss
-// = API reachable) resets the streak. A "miss" does NOT count as blocked — the
-// API answered, the song just isn't in their DB.
-const SCRAPE_FAIL_LIMIT = 2;
-const SCRAPE_COOLDOWN_MS = 15 * 60 * 1000; // pause window after the breaker trips
-let scrapeBlockStreak = 0;
-let scrapeCooldownUntil = 0;
-
-// Waterfall on the SANITIZED metadata: dictionary -> SQLite cache -> GetSongBPM
-// scrape -> null. Layers 1a/1c are instant + offline; only an UNKNOWN track
-// reaches Layer 2 (one hidden-window lookup, ~15 s cold then cached). A null
-// here means the renderer's live dspBpm takes over and writes its own estimate
-// back via learn-bpm, so playback never blocks on the network.
+// Waterfall on the SANITIZED metadata: local dictionary -> SQLite cache -> null.
+// Both layers are instant + offline. A null here means the renderer's live dspBpm
+// estimator takes over and writes its own estimate back via learn-bpm, so an
+// unknown track becomes a local hit on its next play and playback never blocks on
+// the network. (The old GetSongBPM Layer 2 scrape was removed.)
 async function resolveBpm(title, artist) {
-  const s = sanitizeTrackMetadata(title, artist);
-  // LAYER 1a — local dictionary (sanitized key). Checked BEFORE any scraper: a
-  // known track should never spin up a browser window.
+  // LAYER 1a — local dictionary (sanitized key).
   const local = lookupTempoLocal(title, artist);
   if (Number.isFinite(local)) return { bpm: local, source: "dictionary" };
   // LAYER 1c - sandboxed local SQLite cache (offline_cache.db). Instant indexed
   // hit; disabled-safe (returns null when better-sqlite3 isn't loaded).
   const cached = musicDb.getBpm(title, artist);
   if (cached && Number.isFinite(cached.bpm)) return { bpm: cached.bpm, year: cached.year, source: "sqlite-cache" };
-  // LAYER 2 — GetSongBPM via a hidden Chromium window (the only client that
-  // clears its Cloudflare managed challenge; net.fetch is hard-403'd). On a hit
-  // we PERSIST to both stores (dictionary.json + SQLite, with a best-effort
-  // release year) so this song is a 100% offline hit forever after. On a
-  // 403 / CAPTCHA / timeout the scraper returns null -> live dspBpm takes over.
-  if (ENABLE_BPM_SCRAPER && GETSONGBPM_KEY && Date.now() >= scrapeCooldownUntil) {
-    const { bpm: web, status } = await scrapeBpmViaHiddenWindow(
-      BrowserWindow, GETSONGBPM_KEY, s.title, s.artist, { timeoutMs: SCRAPER_TIMEOUT_MS });
-    // Breaker bookkeeping: ok/miss = Cloudflare reachable (reset); timeout/captcha
-    // = blocked (count, and pause scraping once the streak hits the limit).
-    if (status === "ok" || status === "miss") {
-      scrapeBlockStreak = 0;
-    } else if (status === "timeout" || status === "captcha") {
-      if (++scrapeBlockStreak >= SCRAPE_FAIL_LIMIT) {
-        scrapeCooldownUntil = Date.now() + SCRAPE_COOLDOWN_MS;
-        scrapeBlockStreak = 0;
-        console.warn(`[Scraper] Cloudflare blocking (${status}) — pausing GetSongBPM ${SCRAPE_COOLDOWN_MS / 60000} min; live dspBpm only.`);
-      }
-    }
-    if (Number.isFinite(web)) {
-      persistLearnedBpm(title, artist, web); // -> BPM_DICTIONARY + bpm-dictionary.json
-      const save = (year) => { try { musicDb.putMany([{ title, artist, bpm: web, year }]); } catch (_) {} };
-      fetchYearFromMusicBrainz(s.title, s.artist).then(save, () => save(null)); // best-effort, fire-and-forget
-      return { bpm: web, source: "getsongbpm-scrape" };
-    }
-  }
   return null;
 }
 
@@ -482,6 +452,106 @@ function maybeResolveBpm(obj) {
         mainWindow.webContents.send("bpm-update", { title, artist, bpm, year: res.year, source: res.source });
       }
       console.log(`[BPM] ${title} - ${artist} -> ${bpm} (${res.source})`);
+    })
+    .catch(() => {});
+}
+
+/* ── GENRE RESOLVER — tags -> canonical genre -> renderer ───────────────────
+ * The genre half of the motion split: BPM drives the camera, GENRE drives the
+ * per-letter appear/disappear animation. Two providers:
+ *
+ *   • iTunes Search (DEFAULT, KEYLESS) — Apple returns a clean `primaryGenreName`
+ *     for almost every track. No key, no setup; works out of the box for everyone.
+ *   • Last.fm (OPTIONAL) — only when a LASTFM_API_KEY is present. Its crowd-sourced
+ *     "top tags" are noisier but far more granular (real subgenres: phonk, shoegaze,
+ *     vaporwave…), so when a key exists we PREFER it and fall back to iTunes.
+ *
+ * Either way we collapse the result to one of the 50 canonical genres via
+ * ./genre-map and push { genre, animation, source } over "genre-update".
+ * Mirrors fetchYearFromMusicBrainz: one net.fetch, short budget, never throws. */
+const LASTFM_API_KEY = process.env.LASTFM_API_KEY || ""; // OPTIONAL — empty = iTunes only
+const GENRE_LOOKUP_BUDGET_MS = 4000;
+
+// Keyless: Apple's iTunes Search API -> the track's primaryGenreName (one coarse but
+// reliable genre). Returns it as a 1-item list (or [] on miss/error).
+async function lookupGenreItunes(title, artist) {
+  if (!title && !artist) return [];
+  try {
+    const signal = AbortSignal.timeout(GENRE_LOOKUP_BUDGET_MS);
+    const term = encodeURIComponent(`${title} ${artist}`.trim());
+    const u = `https://itunes.apple.com/search?term=${term}&entity=song&limit=1`;
+    const j = await fetchJsonWithTimeout(u, signal).catch(() => null);
+    const r = j && Array.isArray(j.results) ? j.results[0] : null;
+    const g = r && r.primaryGenreName ? String(r.primaryGenreName) : "";
+    return g ? [g] : [];
+  } catch (e) {
+    console.warn("[Genre] iTunes lookup failed: " + (e && e.message ? e.message : e));
+    return [];
+  }
+}
+
+// Optional: ranked Last.fm top tags (track.getTopTags, then artist.getTopTags).
+// Returns string[] (empty when no key or no tags).
+async function lookupGenreLastfm(title, artist) {
+  if (!LASTFM_API_KEY) return [];
+  const base = "https://ws.audioscrobbler.com/2.0/?format=json&autocorrect=1&api_key=" + encodeURIComponent(LASTFM_API_KEY);
+  const tagsFrom = (j) => {
+    const t = j && j.toptags && Array.isArray(j.toptags.tag) ? j.toptags.tag : [];
+    return t
+      .map((x) => ({ name: String(x.name || ""), count: Number(x.count) || 0 }))
+      .filter((x) => x.name)
+      .sort((a, b) => b.count - a.count)
+      .map((x) => x.name);
+  };
+  try {
+    if (title) {
+      const u = base + "&method=track.gettoptags&artist=" + encodeURIComponent(artist) + "&track=" + encodeURIComponent(title);
+      const j = await fetchJsonWithTimeout(u, AbortSignal.timeout(GENRE_LOOKUP_BUDGET_MS)).catch(() => null);
+      const tags = tagsFrom(j);
+      if (tags.length >= 1) return tags;
+    }
+    if (artist) {
+      const u = base + "&method=artist.gettoptags&artist=" + encodeURIComponent(artist);
+      const j = await fetchJsonWithTimeout(u, AbortSignal.timeout(GENRE_LOOKUP_BUDGET_MS)).catch(() => null);
+      return tagsFrom(j);
+    }
+  } catch (e) {
+    console.warn("[Genre] Last.fm lookup failed: " + (e && e.message ? e.message : e));
+  }
+  return [];
+}
+
+// Provider waterfall: Last.fm first when a key is set (richer subgenres), else/empty
+// -> keyless iTunes. Returns { tags:string[], provider:"lastfm"|"itunes" }.
+async function resolveGenreTags(title, artist) {
+  if (LASTFM_API_KEY) {
+    const tags = await lookupGenreLastfm(title, artist);
+    if (tags.length) return { tags, provider: "lastfm" };
+  }
+  return { tags: await lookupGenreItunes(title, artist), provider: "itunes" };
+}
+
+// Resolve + push the genre ONCE per track (SMTC repeats the same track ~1/s).
+let lastGenreTrackKey = "";
+function maybeResolveGenre(obj) {
+  if (!obj || obj.status === "none" || obj.status === "closed") return;
+  const title = obj.title || "";
+  const artist = obj.artist || "";
+  if (!title && !artist) return;
+  const key = (title + "|" + artist).toLowerCase();
+  if (key === lastGenreTrackKey) return; // already resolved this track
+  lastGenreTrackKey = key;
+  const s = sanitizeTrackMetadata(title, artist); // reuse the BPM-side cleaner
+  resolveGenreTags(s.title || title, s.artist || artist)
+    .then(({ tags, provider }) => {
+      if (key !== lastGenreTrackKey) return; // track changed mid-lookup -> drop
+      const r = genreMap.classifyTags(tags); // { genre, animation, source, matched }
+      console.log(`[Genre] ${title} - ${artist} -> ${r.genre} (${r.animation}) [${provider}/${r.source}${r.matched ? ":" + r.matched : ""}] tags=${tags.slice(0, 5).join(", ") || "—"}`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("genre-update", {
+          title, artist, genre: r.genre, animation: r.animation, source: provider, tags: tags.slice(0, 5),
+        });
+      }
     })
     .catch(() => {});
 }

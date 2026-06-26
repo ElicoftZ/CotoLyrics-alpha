@@ -22,6 +22,30 @@
       #status-bar { position: absolute; bottom: 30px; right: 44px; font-size: 9px;
         letter-spacing: 0.22em; text-transform: uppercase; opacity: 0.5; transition: color 0.6s ease; }
 
+      /* Settings gear + panel — pinned bottom-right by the status bar. #ui-overlay
+         is pointer-events:none, so the interactive bits re-enable pointer events. */
+      #settings-btn { position: absolute; bottom: 22px; right: 14px; width: 22px; height: 22px;
+        pointer-events: auto; cursor: pointer; background: none; border: none; color: #1a1a1a;
+        font-size: 15px; line-height: 22px; opacity: 0.45; transition: opacity 0.3s ease; }
+      #settings-btn:hover { opacity: 0.9; }
+      #settings-panel { position: absolute; bottom: 52px; right: 14px; pointer-events: auto;
+        min-width: 210px; background: #fff; border: 1px solid rgba(0,0,0,0.12); border-radius: 4px;
+        box-shadow: 0 6px 24px rgba(0,0,0,0.14); padding: 14px 16px; color: #1a1a1a;
+        font-size: 11px; letter-spacing: 0.06em; }
+      #settings-panel.hidden { display: none; }
+      #settings-panel .settings-title { font-size: 9px; letter-spacing: 0.22em;
+        text-transform: uppercase; opacity: 0.5; margin-bottom: 12px; }
+      #settings-panel .settings-row { display: flex; justify-content: space-between;
+        align-items: baseline; gap: 14px; margin-bottom: 12px; }
+      #settings-panel .settings-label { font-size: 9px; letter-spacing: 0.18em;
+        text-transform: uppercase; opacity: 0.55; }
+      #settings-panel #font-name { font-weight: 700; text-align: right; max-width: 130px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      #settings-panel #font-upload-btn { width: 100%; padding: 7px 10px; cursor: pointer;
+        background: #1a1a1a; color: #fff; border: none; border-radius: 3px; font-size: 10px;
+        letter-spacing: 0.16em; text-transform: uppercase; transition: opacity 0.3s ease; }
+      #settings-panel #font-upload-btn:hover { opacity: 0.85; }
+
       #start-prompt { position: absolute; inset: 0; display: flex; flex-direction: column;
         align-items: center; justify-content: center; pointer-events: none; transition: opacity 1.2s ease; }
       #start-prompt.hidden { opacity: 0; }
@@ -42,6 +66,50 @@
 
       @keyframes pulse { 0%,100% { opacity: 0.35; } 50% { opacity: 0.7; } }
       .searching { animation: pulse 2.4s infinite ease-in-out; }
+
+      /* ── APPLE MUSIC MODE — DOM scrolling-lyrics overlay (white theme) ──────
+         Shown only when the Settings toggle is ON; replaces the Three.js canvas.
+         Montserrat (same faces the canvas uses) for matching typography. */
+      @font-face { font-family: "MontserratAM"; font-weight: 300; font-display: swap;
+        src: url("https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/Montserrat_300Light.ttf") format("truetype"); }
+      @font-face { font-family: "MontserratAM"; font-weight: 700; font-display: swap;
+        src: url("https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/Montserrat_700Bold.ttf") format("truetype"); }
+      @font-face { font-family: "MontserratAM"; font-weight: 900; font-display: swap;
+        src: url("https://cdn.jsdelivr.net/npm/@expo-google-fonts/montserrat/Montserrat_900Black.ttf") format("truetype"); }
+
+      #am-lyrics { position: fixed; inset: 0; z-index: 5; background: #ffffff;
+        overflow: hidden; pointer-events: none; }
+      #am-lyrics.hidden { display: none; }
+      #am-lyrics-inner { position: absolute; top: 50%; left: 0; right: 0; width: 100%;
+        text-align: center; padding: 0 8vw; will-change: transform; }
+      .am-line { font-family: "MontserratAM","Helvetica Neue",Arial,sans-serif;
+        font-weight: 700; font-size: clamp(22px, 4.2vw, 52px); line-height: 1.3;
+        letter-spacing: -0.01em; opacity: 0.4; transform: scale(0.98); transform-origin: center;
+        transition: opacity 0.45s ease, transform 0.45s ease; margin: 0.2em 0; }
+      .am-line.past { opacity: 0.5; }
+      .am-line.active { opacity: 1; font-weight: 800; transform: scale(1.05); }
+      /* Per-word karaoke wipe: a hard charcoal→gray stop at --fill, clipped to glyphs. */
+      .am-word { display: inline-block; color: transparent; -webkit-text-fill-color: transparent;
+        background-image: linear-gradient(90deg, #141414 var(--fill,0%), #bdbdbd var(--fill,0%));
+        -webkit-background-clip: text; background-clip: text; transition: transform 0.18s ease; }
+      .am-line.active .am-word.cur { transform: scale(1.06); }
+      #am-placeholder { position: absolute; inset: 0; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; font-family: "MontserratAM",Arial,sans-serif;
+        color: #c4c4c4; gap: 14px; }
+      #am-placeholder .am-ph-title { font-size: 16px; font-weight: 700; letter-spacing: 0.2em;
+        text-transform: uppercase; color: #9a9a9a; }
+      #am-placeholder .am-ph-note { font-size: 34px; }
+
+      /* Settings toggle switch */
+      .am-switch { position: relative; display: inline-block; width: 34px; height: 18px; pointer-events: auto; }
+      .am-switch input { position: absolute; opacity: 0; width: 0; height: 0; }
+      .am-switch .am-track { display: block; width: 34px; height: 18px; border-radius: 9px;
+        background: #d0d0d0; position: relative; transition: background 0.2s ease; cursor: pointer; }
+      .am-switch .am-track::after { content: ""; position: absolute; top: 2px; left: 2px;
+        width: 14px; height: 14px; border-radius: 50%; background: #fff;
+        box-shadow: 0 1px 2px rgba(0,0,0,0.3); transition: left 0.2s ease; }
+      .am-switch input:checked + .am-track { background: #1a1a1a; }
+      .am-switch input:checked + .am-track::after { left: 18px; }
     </style>
 
     <script type="importmap">
@@ -51,6 +119,7 @@
 
   <body>
     <canvas id="three-canvas"></canvas>
+    <div id="am-lyrics" class="hidden"><div id="am-lyrics-inner"></div></div>
 
     <div id="ui-overlay">
       <div id="song-info">
@@ -65,6 +134,20 @@
         </p>
       </div>
       <div id="status-bar">Listening</div>
+      <button id="settings-btn" type="button" title="Settings" aria-label="Settings">⚙</button>
+      <div id="settings-panel" class="hidden">
+        <div class="settings-title">Settings</div>
+        <div class="settings-row">
+          <span class="settings-label">Apple Music Lyrics</span>
+          <label class="am-switch"><input id="apple-toggle" type="checkbox" /><span class="am-track"></span></label>
+        </div>
+        <div class="settings-row">
+          <span class="settings-label">Font</span>
+          <span id="font-name">Montserrat</span>
+        </div>
+        <button id="font-upload-btn" type="button">Upload font…</button>
+        <input id="font-file" type="file" accept=".ttf,.otf" hidden />
+      </div>
       <div id="progress-bar-wrap"><div id="progress-bar-fill"></div></div>
       <div id="error-toast"></div>
     </div>
@@ -89,6 +172,15 @@
       const songArtistEl = document.getElementById("song-artist");
       const progressFill = document.getElementById("progress-bar-fill");
       const errorToast = document.getElementById("error-toast");
+      const settingsBtn = document.getElementById("settings-btn");
+      const settingsPanel = document.getElementById("settings-panel");
+      const fontUploadBtn = document.getElementById("font-upload-btn");
+      const fontFileInput = document.getElementById("font-file");
+      const fontNameEl = document.getElementById("font-name");
+      const threeCanvas = document.getElementById("three-canvas");
+      const amLyrics = document.getElementById("am-lyrics");
+      const amInner = document.getElementById("am-lyrics-inner");
+      const appleToggle = document.getElementById("apple-toggle");
 
       /* ── § 2  CONSTANTS ──────────────────────────────────────────────── */
       // Mood-themed type families (static TTFs opentype.js can parse).
@@ -132,6 +224,10 @@
       const ENTRANCE_STAGGER = 0.045; // s between word entrances
       const CHAR_STAGGER = 0.028; // s between consecutive letters flying in (used by §9 + §10)
       const REVEAL_RAMP = 0.05; // s — per-letter fade-in ramp for the left→right typewriter reveal
+      const ENTRANCE_DUR = 0.42; // s — per-letter APPEARING (entrance) window; the spatial
+                                 // animation settles over this, longer than the opacity ramp
+      const DISAPPEAR_DUR = 0.45; // s — per-letter DISAPPEAR (exit) window when a line finishes
+      const IDLE_W = 0.3; // weight of the subtle post-entrance idle (0 = rest still, 1 = full)
       const EXIT_DRIFT_Z = 2.4; // exit Z-drift (units/s)
       const FRUSTUM_MARGIN = 0.86; // safe-zone fraction of the visible plane
       const CJK_RE = /[぀-ヿ㐀-鿿豈-﫿ｦ-ﾟ]/;
@@ -221,6 +317,9 @@
       const fontCache = new Map(); // url -> opentype.Font
       const fontPending = new Map(); // url -> Promise
       let fontsReady = false;
+      // User-uploaded lyrics font (Settings panel). null = use the built-in weight.
+      let customFont = null;             // opentype.Font once a custom face is loaded
+      let customFontName = "Montserrat"; // shown in the Settings panel
 
       function loadFont(url) {
         if (fontCache.has(url)) return Promise.resolve(fontCache.get(url));
@@ -248,6 +347,9 @@
           if (cjk) return cjk;
           loadFont(F.cjk).catch(() => {}); // lazy; fall through to Latin meanwhile
         }
+        // A user-uploaded font overrides the built-in weight for Latin text. CJK
+        // keeps the bundled fallback above, since user fonts rarely carry CJK glyphs.
+        if (customFont) return customFont;
         return (
           fontCache.get(F.montBlack) || // heaviest 900 weight — unified across all lyrics
           fontCache.get(F.montBold) ||
@@ -313,7 +415,9 @@
             front.position.set(penX, 0, FRONT_Z);
             group.add(shadow);
             group.add(front);
-            chars.push({ front, shadow, geo, baseX: penX });
+            // `em`/`baseX` let the genre per-letter engine offset each glyph from its
+            // static home (baseX) in em-relative units; `seed` lazily set on first anim.
+            chars.push({ front, shadow, geo, baseX: penX, em: emSize, seed: 0 });
           }
           // Tracking + kerning apply only BETWEEN glyphs — never a trailing unit
           // after the last glyph, or the word's width overshoots and glued
@@ -338,14 +442,17 @@
         return w;
       }
 
-      /* ── § 7  LINE / WORD POOL + FOOLPROOF CANVAS CLEAR ──────────────────
-       * Only ONE phrase is ever on screen. `activeLyricMeshes` is the explicit
-       * tracking array of EVERY mesh currently drawn (front faces + shadow/tint
-       * duplicates). clearCanvasLyrics() removes + GPU-disposes all of them in one
-       * pass — called BEFORE building a new phrase, so old text can never linger
-       * or stack underneath (there is no fade-out pipeline that could overlap). */
+      /* ── § 7  LINE / WORD POOL + CANVAS CLEAR ────────────────────────────
+       * One ACTIVE phrase, plus a short-lived pool of EXITING lines playing their
+       * disappear animation out. `activeLyricMeshes` tracks the active line's meshes
+       * (front + shadow). clearCanvasLyrics() instantly disposes the active line AND
+       * flushes the exiting pool (seek/track-change); retireActiveLineAnimated()
+       * moves the active line into the exiting pool to animate out before disposal. */
       let activeLine = null; // { group, words:[wordObj], phrase, profile, ... }
       const activeLyricMeshes = []; // [{ front, shadow, geo }] — all visible meshes
+      // Lines that finished and are playing their DISAPPEAR (exit) animation out
+      // before disposal. Each carries { exitStart, exitFn, exitP, retiring }.
+      const exitingLines = [];
 
       function disposeWordMeshes(wd) {
         if (wd.chars) {
@@ -370,18 +477,47 @@
         }
       }
 
-      // FOOLPROOF CLEAR — remove every tracked mesh from the scene graph and free
-      // its GPU geometry + material, then drop the line group and empty the array.
-      function clearCanvasLyrics() {
-        for (const c of activeLyricMeshes) {
-          if (c.front) { if (c.front.parent) c.front.parent.remove(c.front); c.front.material.dispose(); }
-          if (c.shadow) { if (c.shadow.parent) c.shadow.parent.remove(c.shadow); c.shadow.material.dispose(); }
-          if (c.geo) c.geo.dispose();
+      // Dispose ONE line's meshes (front+shadow+geo) and remove its group. Works
+      // for the active line AND any exiting line (walks the line's own word tree,
+      // not the global index, so an exiting line disposes independently).
+      function disposeLineMeshes(line) {
+        if (!line) return;
+        for (const wd of line.words || []) {
+          if (!wd.chars) continue;
+          for (const c of wd.chars) {
+            if (c.front) { if (c.front.parent) c.front.parent.remove(c.front); c.front.material.dispose(); }
+            if (c.shadow) { if (c.shadow.parent) c.shadow.parent.remove(c.shadow); c.shadow.material.dispose(); }
+            if (c.geo) c.geo.dispose();
+          }
         }
+        if (line.group) scene.remove(line.group);
+      }
+
+      // FOOLPROOF INSTANT CLEAR — dispose the active line AND flush every exiting
+      // line immediately (no exit animation). Used for seek / track-change / reset.
+      function clearCanvasLyrics() {
+        disposeLineMeshes(activeLine); activeLine = null;
+        for (const l of exitingLines) disposeLineMeshes(l);
+        exitingLines.length = 0;
         activeLyricMeshes.length = 0;
-        if (activeLine) { scene.remove(activeLine.group); activeLine = null; }
       }
       const retireActiveLine = clearCanvasLyrics; // seek / no-phrase / track-change
+
+      // ANIMATED RETIRE — move the active line into the exiting pool so its letters
+      // play the genre's DISAPPEAR animation, then get disposed when it completes.
+      // Falls back to an instant dispose when animations are off.
+      function retireActiveLineAnimated() {
+        if (!activeLine) return;
+        if (!ANIMATIONS_ACTIVE) { disposeLineMeshes(activeLine); activeLine = null; return; }
+        const line = activeLine;
+        line.exitStart = performance.now() / 1000;
+        line.exitFn = exitPrimFor();                 // resolved exit primitive fn
+        line.exitP = Object.assign({}, gGenreAnim);  // snapshot params for this line's genre
+        line.retiring = true;
+        exitingLines.push(line);
+        activeLine = null;
+        activeLyricMeshes.length = 0; // the new line rebuilds this; the exiting line keeps its own meshes
+      }
 
       /* ── § 8  LAYOUT PROFILES (frustum-aware) ────────────────────────────
        * Each assigns every word a target { x, y } (left edge), baseScale, rot,
@@ -534,10 +670,6 @@
         // (both lowercased; helpers normalise for you), e.g.
         // "never gonna give you up|rick astley": 113,
       };
-      // OPTIONAL web lookup (GetSongBPM). Needs a free api_key + a backlink per
-      // their TOS and may be CORS-blocked from app://. Empty = disabled.
-      const GETSONGBPM_KEY = "";
-
       // Normalise "Title" + "Artist" into a stable dictionary key (drops
       // (feat …)/[remix], " - Single/Instrumental/Remaster/Live", punctuation).
       function tempoKey(title, artist) {
@@ -553,31 +685,27 @@
         const bpm = BPM_DICTIONARY[tempoKey(title, artist)];
         return Number.isFinite(bpm) ? bpm : null;
       }
-      async function lookupTempoApi(title, artist) {
-        if (!GETSONGBPM_KEY) return null;
-        try {
-          const q = encodeURIComponent(`song:${title} artist:${artist}`);
-          const r = await fetch(`https://api.getsongbpm.com/search/?api_key=${GETSONGBPM_KEY}&type=both&lookup=${q}`);
-          if (!r.ok) return null;
-          const j = await r.json();
-          const hit = j && j.search && (Array.isArray(j.search) ? j.search[0] : null);
-          const tempo = hit && parseFloat(hit.tempo);
-          return Number.isFinite(tempo) && tempo > 0 ? tempo : null;
-        } catch (_) { return null; }
-      }
 
       // Raw tempo -> profile. <100 calm ballad/ambient · 100–125 groove ·
       // 125–140 energetic build · >=140 aggressive/high-intensity (e.g. 180 BPM).
       // No tempo detected -> fall back to live energy + lyric heuristics.
-      function profileFromBpm(bpm, energy) {
+      function profileFromBpm(bpm, energy, cur) {
         if (!(bpm > 0)) {
           // No clear beat detected -> energy-based 3-tier fallback.
           const e = Math.max(0, Math.min(1, energy));
           return e < 0.34 ? "A" : e < 0.66 ? "B" : "D";
         }
-        if (bpm < 100) return "A"; // Tier 1 — calm: ballad / ambient
-        if (bpm < 140) return "B"; // Tier 2 — pop: cinematic / orbit
-        return "D";                // Tier 3 — intense: rock / punch / erratic
+        // Crisp tier edges at 100 / 140 BPM. When a current tier `cur` is passed
+        // (the live follower), the BPM must cross ~6 PAST the edge before the tier
+        // is allowed to change — so jitter sitting on a boundary can't flip the
+        // profile back and forth (the "shake"). Authoritative locks pass no `cur`,
+        // keeping the original crisp mapping.
+        const M = cur ? 6 : 0;
+        const loEdge = cur === "A" ? 100 + M : 100 - M; // leave A only above 106; enter A only below 94
+        const hiEdge = cur === "D" ? 140 - M : 140 + M; // leave D only below 134; enter D only above 146
+        if (bpm < loEdge) return "A"; // Tier 1 — calm: ballad / ambient
+        if (bpm < hiEdge) return "B"; // Tier 2 — pop: cinematic / orbit
+        return "D";                   // Tier 3 — intense: rock / punch / erratic
       }
 
       // Lock the profile for the whole track (mirror + cascade speed + display BPM).
@@ -596,16 +724,20 @@
       // wrong tier (the "stuck on Calm while the song is 184 BPM" bug: the tier
       // used to lock on the first lyric line, before dspBpm had warmed up). A
       // short debounce stops the tier flickering across a boundary mid-settle.
+      // The live tier must hold steady for this long before it is allowed to
+      // commit — long enough that a still-settling dspBpm estimate bouncing across
+      // a tier edge can't flip the profile every frame.
+      const PROFILE_STABLE_SEC = 3.0;
       let liveTierCand = null, liveTierCandSince = 0;
       function updateLiveProfile(tSec) {
         if (lockedProfile) return;            // authoritative tempo already froze the tier
         const bpm = Number.isFinite(trackBpmOverride) && trackBpmOverride > 0 ? trackBpmOverride : dspBpm;
         if (!(bpm > 0)) return;               // nothing settled yet -> keep current default
         lockedBpm = bpm; everLocked = true;   // status bar reflects the live value
-        const next = profileFromBpm(bpm, smoothEnergy);
+        const next = profileFromBpm(bpm, smoothEnergy, renderProfile); // hysteresis vs current tier
         if (next === renderProfile) { liveTierCand = null; return; }
         if (next !== liveTierCand) { liveTierCand = next; liveTierCandSince = tSec; return; }
-        if (tSec - liveTierCandSince >= 0.35) { // candidate held steady -> commit
+        if (tSec - liveTierCandSince >= PROFILE_STABLE_SEC) { // candidate held 3 s -> commit
           renderProfile = next;
           gStagger = CHAR_STAGGER * (next === "A" ? 1.9 : next === "D" ? 0.45 : next === "C" ? 0.6 : 1);
           liveTierCand = null;
@@ -620,24 +752,265 @@
         return renderProfile;
       }
 
-      // Per-profile kinetic intensity — gentle/slow for calm, fast/erratic for
-      // aggressive. Drives the idle vibration, chaos jitter, and alpha-fade speed.
-      //   idle  : idle-wobble amplitude       freq : wobble/vibration rate
-      //   chaos : rapid erratic shake offset   opac : alpha-fade speed multiplier
-      const PROFILE_KINETICS = {
-        A: { idle: 0.45, freq: 0.8, chaos: 0.0, opac: 0.55 }, // ballad / float / ambient
-        B: { idle: 1.0, freq: 1.0, chaos: 0.08, opac: 1.0 },  // groove
-        C: { idle: 1.7, freq: 1.5, chaos: 0.3, opac: 1.5 },   // energetic build
-        D: { idle: 2.8, freq: 2.4, chaos: 0.8, opac: 2.2 },   // rock / punch / aggressive spin
+      // Per-profile CAMERA intensity. The BPM tier now drives ONLY the camera /
+      // zoom — never the letters (those are the genre engine's job). No tier
+      // shakes anything; "shake" is gone from every profile.
+      //   zoomAmp  : dolly depth (world units the camera pushes IN toward the line)
+      //   zoomRate : dolly loop speed (rad/s base for the zoom-in→out→repeat cycle)
+      //   moveAmp  : lateral drift/pan amplitude (A's lemniscate; 0 for B's pure dolly)
+      //   chase    : 0..1 — how hard the camera tracks the active word (D only)
+      const PROFILE_CAMERA = {
+        A: { zoomAmp: 1.2, zoomRate: 0.45, moveAmp: 1.1, chase: 0.0 }, // calm: gentle pan + faint breath
+        B: { zoomAmp: 4.2, zoomRate: 0.9, moveAmp: 0.0, chase: 0.0 },  // pop: ZOOM into the lyric, repeat
+        C: { zoomAmp: 4.2, zoomRate: 0.9, moveAmp: 0.0, chase: 0.0 },  // (unreached) — alias of B
+        D: { zoomAmp: 3.2, zoomRate: 1.5, moveAmp: 0.7, chase: 1.0 },  // intense: chase + snappy dolly
       };
+      // Smoothly-eased mirror of the active profile's CAMERA params. updateCamera
+      // reads THIS (not the raw table) so a tier change RAMPS the camera over
+      // ~0.5 s instead of snapping the framing.
+      const camK = { ...PROFILE_CAMERA.B };
+      const PROFILE_TWEEN_K = 1.8; // ease rate (1/s) ≈ 0.5 s time-constant
       // Human-readable tier label for the status bar (so the active tier is visible).
       const TIER_NAMES = { A: "Calm", B: "Pop", C: "Pop", D: "Intense" };
 
-      /* ── WORD-LEVEL KINETICS ─────────────────────────────────────────────
-       * The reveal is now strictly WORD-by-word: each word is an atomic group of
-       * static glyphs, and motion lives on the parent group (slide + spring pop +
-       * active-word vibrate/pulse). There is no longer any per-CHARACTER animation
-       * record — `freshChar`/`makeCharFrom` were removed with the letter cascade. */
+      /* ── § GENRE LETTER-BY-LETTER ANIMATION ENGINE (APPEARING) ───────────
+       * The motion split: the BPM tier drives the CAMERA (above); the GENRE drives
+       * the LETTERS (here). main.js resolves the track's canonical genre from
+       * Last.fm tags (./genre-map) and ships { genre, animation } over IPC; the
+       * renderer looks the genre up in GENRE_ANIM and animates each glyph.
+       *
+       * Each primitive is now an APPEARING (entrance) animation: a cool one-shot
+       * motion driven by the letter's entrance progress `e` (0→1 over ENTRANCE_DUR
+       * from the letter's own birth), composed as
+       *     entrance × (1 − easeOut(e))   +   idle(t) × IDLE_W × e
+       * so the letter flies/drops/spins/flickers into place and then keeps only a
+       * faint genre-specific idle. 16 primitives total (12 refreshed + 4 new).
+       *
+       * A primitive is a pure fn (e, t, i, s, P) -> { dx,dy,dz, rot,rotX, sx,sy, op }
+       * (EM-fraction / radians / scale-mult / opacity-mult; all fields optional).
+       * Amplitudes are bounded for readability; `jitter` is the only "shaky" one and
+       * it is genre-gated, never BPM-driven. */
+      const TAU = Math.PI * 2;
+      const easeOutCubic = (x) => 1 - Math.pow(1 - x, 3);
+      const easeOutExpo = (x) => (x >= 1 ? 1 : 1 - Math.pow(2, -10 * x));
+      const easeOutBack = (x) => { const c1 = 1.70158, c3 = c1 + 1, u = x - 1; return 1 + c3 * u * u * u + c1 * u * u; };
+      const easeOutElastic = (x) => { if (x <= 0) return 0; if (x >= 1) return 1; const c4 = TAU / 3; return Math.pow(2, -10 * x) * Math.sin((x * 10 - 0.75) * c4) + 1; };
+      const easeOutBounce = (x) => { const n1 = 7.5625, d1 = 2.75; if (x < 1 / d1) return n1 * x * x; if (x < 2 / d1) { x -= 1.5 / d1; return n1 * x * x + 0.75; } if (x < 2.5 / d1) { x -= 2.25 / d1; return n1 * x * x + 0.9375; } x -= 2.625 / d1; return n1 * x * x + 0.984375; };
+      const GLYPH_PRIMS = {
+        // Drop in from above with a bounce settle, then a small idle hop (Pop / Afrobeats).
+        bounce: (e, t, i, s, P) => { const eo = easeOutBack(e); const idle = Math.abs(Math.sin(t * P.freq * TAU - i * P.stag)) * P.amp; return { dy: (1 - eo) * 0.85 + idle * IDLE_W * e }; },
+        // Scale-pop in (back-ease overshoot), tiny idle pulse (Hip-Hop / Trap / Grime / Flamenco).
+        punch: (e, t, i, s, P) => { const eo = easeOutBack(e); const sc = 1 + (1 - eo) * 0.6; const idle = Math.pow(Math.max(0, Math.sin(t * P.freq * TAU - i * P.stag)), 6) * P.amp * 4 * IDLE_W * e; return { sx: sc + idle, sy: sc + idle, dz: (1 - eo) * 0.3 }; },
+        // Slide + rotate in from alternating sides, small idle sway (Rock / Latin / Soul-Funk).
+        kinetic: (e, t, i, s, P) => { const eo = easeOutCubic(e); const g = 1 - eo, dir = i % 2 ? 1 : -1, ph = t * P.freq * TAU - i * P.stag; return { dx: g * 0.6 * dir + Math.sin(ph) * P.amp * 0.4 * IDLE_W * e, rot: g * 0.5 * dir + Math.sin(ph * 1.2) * P.amp * 2 * IDLE_W * e }; },
+        // Digital glitch-assemble: decaying random jumps + flicker, rare idle flicker (Electronic / Phonk).
+        glitch: (e, t, i, s, P) => { const g = 1 - e, bk = Math.floor(e * 14); const jx = (rnd(s + i * 7 + bk * 5) - 0.5) * g * 0.7, jy = (rnd(s + i * 11 + bk * 7) - 0.5) * g * 0.4; const fl = (e < 0.92 && rnd(s + bk * 3 + i) < 0.3) ? 0.15 : 1; const idf = rnd(s + Math.floor(t * 6)) < 0.04 ? 0.5 : 1; return { dx: jx, dy: jy, op: fl * idf }; },
+        // Blur/drift in from an offset at low alpha (emulated blur), gentle idle drift
+        // + shimmer (Lo-Fi / Ambient / Shoegaze / Dark-Ambient / Emo / Celtic).
+        blurDrift: (e, t, i, s, P) => { const eo = easeOutExpo(e), g = 1 - eo, ph = t * P.freq * TAU + i * P.stag; return { dx: g * 0.5 * (i % 2 ? 1 : -1) + Math.sin(ph) * P.amp * IDLE_W * e, dy: g * 0.3 + Math.cos(ph * 0.7) * P.amp * 0.6 * IDLE_W * e, op: (0.2 + 0.8 * eo) * (0.85 + 0.15 * (0.5 + 0.5 * Math.sin(ph * 1.3))) }; },
+        // Glow in from dim+small to bright, gentle glow idle (kept in palette; setAnim-previewable).
+        glowPulse: (e, t, i, s, P) => { const eo = easeOutCubic(e), sc = 0.4 + 0.6 * eo, ph = t * P.freq * TAU - i * P.stag, gl = (0.5 + 0.5 * Math.sin(ph)) * P.amp * 2 * IDLE_W * e; return { sx: sc + gl, sy: sc + gl, op: 0.3 + 0.7 * eo, dy: Math.sin(ph * 2) * P.amp * 0.3 * IDLE_W * e }; },
+        // Swing in on an elastic pendulum, small idle sway (Jazz / Reggae / House / Acid-Jazz / Bossa / Opera).
+        swing: (e, t, i, s, P) => { const eo = easeOutElastic(e), ph = t * P.freq * TAU - i * P.stag; return { rot: (1 - eo) * 0.6 + Math.sin(ph) * P.amp * 3 * IDLE_W * e, dx: Math.sin(ph) * P.amp * 0.5 * IDLE_W * e }; },
+        // Rise in from below, gentle traveling-wave idle (R&B / Blues / Post-Rock / Gospel / Orchestral).
+        wave: (e, t, i, s, P) => { const eo = easeOutCubic(e), ph = t * P.freq * TAU - i * P.stag; return { dy: -(1 - eo) * 0.6 + Math.sin(ph) * P.amp * IDLE_W * e }; },
+        // Shake in hard, then calm to a tiny persistent idle jitter (Metal / Punk / Grunge).
+        jitter: (e, t, i, s, P) => { const g = 1 - e, bk = Math.floor(t * (10 + P.freq * 8)), amp = P.amp * (0.3 + g * 2.5); return { dx: (rnd(s + i * 5 + bk) - 0.5) * amp, dy: (rnd(s + i * 9 + bk * 2) - 0.5) * amp, rot: (rnd(s + i * 3 + bk * 4) - 0.5) * amp * 2 }; },
+        // Quantized / stepped snap-in, robotic, tiny stepped idle (Industrial / Techno / Chiptune / Math-Rock / Bluegrass).
+        mechanical: (e, t, i, s, P) => { const eo = Math.floor(e * 4) / 4, g = 1 - eo, idle = (Math.round(Math.sin(t * P.freq * TAU - i * P.stag) * 3) / 3) * P.amp * IDLE_W * e; return { dx: g * 0.5 * (i % 2 ? 1 : -1), dy: g * 0.4 + idle, op: 0.3 + 0.7 * eo }; },
+        // Stretch in (elastic horizontal squash/overshoot), small idle (Ska / Dubstep).
+        elastic: (e, t, i, s, P) => { const eo = easeOutElastic(e), g = 1 - eo, idle = Math.sin(t * P.freq * TAU - i * P.stag) * P.amp; return { sx: 1 + g * 0.6 + idle * 4 * IDLE_W * e, sy: 1 - g * 0.35 - idle * 2.5 * IDLE_W * e }; },
+        // Soft fade + small rise; near-still, keeps calm genres legible (Country / Classical / Indie-Folk / Default).
+        staticReveal: (e, t, i, s, P) => { const eo = easeOutCubic(e), ph = t * P.freq * TAU - i * P.stag; return { dy: -(1 - eo) * 0.15 + Math.sin(ph) * P.amp * 0.4 * IDLE_W * e, op: 0.2 + 0.8 * eo }; },
+
+        // ── 4 NEW APPEARING STYLES ──────────────────────────────────────────
+        // Fly in from a seeded random direction/distance, snap with overshoot (Hyperpop / Future Bass).
+        scatterGather: (e, t, i, s, P) => { const eo = easeOutBack(e), g = 1 - eo, ang = rnd(s + i * 13) * TAU, dist = 1.0 + rnd(s + i * 29) * 0.8; const idle = (rnd(s + Math.floor(t * (8 + P.freq * 6)) + i) - 0.5) * P.amp * IDLE_W * e; return { dx: Math.cos(ang) * dist * g + idle, dy: Math.sin(ang) * dist * g, rot: g * (rnd(s + i * 7) - 0.5) * 2 }; },
+        // 3D card flip on the X axis (90°→0), alpha-in, faint flip-breath idle (K-Pop / New Wave).
+        flipIn: (e, t, i, s, P) => { const eo = easeOutCubic(e), g = 1 - eo, dir = i % 2 ? 1 : -1; return { rotX: g * (Math.PI * 0.5) * dir + Math.sin(t * P.freq * TAU - i * P.stag) * P.amp * 0.5 * IDLE_W * e, dy: g * 0.1, op: 0.2 + 0.8 * eo }; },
+        // Spin (~1.5 turns) while scaling up from tiny, small idle spin-sway (Disco / Ska Punk).
+        spinIn: (e, t, i, s, P) => { const eo = easeOutCubic(e), g = 1 - eo, sc = 0.2 + 0.8 * eo, idle = Math.sin(t * P.freq * TAU - i * P.stag) * P.amp * 2 * IDLE_W * e; return { rot: g * Math.PI * 3 * (i % 2 ? 1 : -1) + idle, sx: sc, sy: sc }; },
+        // Neon-sign flicker-on: stutter a few times then lock solid with a glow pop, then shimmer (Cyberpunk / Synthwave / Vaporwave).
+        neonFlicker: (e, t, i, s, P) => { let op; if (e < 0.78) { const fb = Math.floor(e * 16); op = rnd(s + i * 5 + fb * 11) < 0.45 ? 0.12 : 1; } else { op = 0.9 + 0.1 * (0.5 + 0.5 * Math.sin(t * P.freq * TAU - i * P.stag)); } const pop = e > 0.7 && e < 1 ? Math.sin(((e - 0.7) / 0.3) * Math.PI) * 0.18 : 0; return { op, sx: 1 + pop, sy: 1 + pop }; },
+
+        // ── 10 MORE APPEARING STYLES (calm-leaning; "blur for calm" + friends) ──
+        // CALM blur-in: starts heavily faded (≈blur) and slightly drifted, focuses sharp (Ambient).
+        softBlur: (e, t, i, s, P) => { const eo = easeOutExpo(e), g = 1 - eo, ph = t * P.freq * TAU + i * P.stag; return { dx: g * 0.25 * (i % 2 ? 1 : -1) + Math.sin(ph) * P.amp * IDLE_W * e, dy: g * 0.18, op: 0.08 + 0.92 * eo * (0.92 + 0.08 * Math.sin(ph)) }; },
+        // Gentle fade + tiny rise; the calmest, most legible reveal (Classical).
+        fadeUp: (e, t, i, s, P) => { const eo = easeOutCubic(e); return { dy: -(1 - eo) * 0.22, op: eo }; },
+        // Slow lateral drift in from the side, very calm (Lo-Fi).
+        driftIn: (e, t, i, s, P) => { const eo = easeOutExpo(e), g = 1 - eo, ph = t * P.freq * TAU - i * P.stag; return { dx: g * 0.7 + Math.sin(ph) * P.amp * 0.6 * IDLE_W * e, op: 0.2 + 0.8 * eo }; },
+        // Rise from below + fade, with a faint swell idle (Gospel).
+        riseFade: (e, t, i, s, P) => { const eo = easeOutCubic(e), g = 1 - eo, ph = t * P.freq * TAU - i * P.stag; return { dy: -g * 0.5 + Math.sin(ph) * P.amp * 0.5 * IDLE_W * e, op: eo, sy: 1 + 0.05 * Math.sin(ph) * IDLE_W * e }; },
+        // Heavy drop from high with a real bounce + squash landing (Trap).
+        dropHeavy: (e, t, i, s, P) => { const eo = easeOutBounce(e), land = e > 0.85 ? Math.sin(((e - 0.85) / 0.15) * Math.PI) : 0; return { dy: (1 - eo) * 1.3, sy: 1 - land * 0.22, sx: 1 + land * 0.15 }; },
+        // Sharp scale pop from 0 with overshoot (Grime).
+        popScale: (e, t, i, s, P) => { const sc = easeOutBack(e); return { sx: sc, sy: sc, op: Math.min(1, e * 3) }; },
+        // Springy damped wobble settle (Ska).
+        wobbleIn: (e, t, i, s, P) => { const eo = easeOutElastic(e), g = 1 - eo; return { dx: g * 0.4 * (i % 2 ? 1 : -1), rot: g * 0.3, op: Math.min(1, e * 3) }; },
+        // Cinematic zoom-from-large + blur focusing to settle (Orchestral Film).
+        zoomBlur: (e, t, i, s, P) => { const eo = easeOutExpo(e), g = 1 - eo; return { sx: 1 + g * 1.2, sy: 1 + g * 1.2, dz: g * 0.5, op: 0.1 + 0.9 * eo }; },
+        // Slide in from alternating sides (House).
+        slideIn: (e, t, i, s, P) => { const eo = easeOutCubic(e), g = 1 - eo; return { dx: g * 0.8 * (i % 2 ? 1 : -1), op: Math.min(1, e * 4) }; },
+        // Vertical unfold: scaleY 0→1 with an overshoot, a slight widen during (Opera).
+        unfoldV: (e, t, i, s, P) => { const eo = easeOutBack(e); return { sy: Math.max(0.02, eo), sx: 1 + (1 - eo) * 0.1, op: Math.min(1, e * 4) }; },
+      };
+
+      // 50 canonical genres -> { prim, amp, freq, stag }. Same names/labels as
+      // genre-map.js (Genre.txt). amp = em-fraction, freq = Hz-ish, stag = per-
+      // letter phase (rad). Genres sharing a primitive differ via these params.
+      const GENRE_ANIM = {
+        "Pop": { prim: "bounce", amp: 0.12, freq: 1.1, stag: 0.5 },
+        "Hip-Hop / Rap": { prim: "punch", amp: 0.06, freq: 1.3, stag: 0.6 },
+        "Rock": { prim: "kinetic", amp: 0.10, freq: 1.2, stag: 0.45 },
+        "Electronic / EDM": { prim: "glitch", amp: 0.10, freq: 2.0, stag: 0.0 },
+        "R&B": { prim: "wave", amp: 0.07, freq: 0.7, stag: 0.55 },
+        "Country": { prim: "staticReveal", amp: 0.05, freq: 0.5, stag: 0.4 },
+        "Jazz": { prim: "swing", amp: 0.05, freq: 0.8, stag: 0.5 },
+        "Classical": { prim: "fadeUp", amp: 0.045, freq: 0.4, stag: 0.5 },
+        "Reggae": { prim: "swing", amp: 0.06, freq: 0.6, stag: 0.5 },
+        "Metal": { prim: "jitter", amp: 0.10, freq: 2.4, stag: 0.0 },
+        "Lo-Fi": { prim: "driftIn", amp: 0.05, freq: 0.35, stag: 0.6 },
+        "Synthwave": { prim: "neonFlicker", amp: 0.05, freq: 1.0, stag: 0.5 },
+        "Indie / Folk": { prim: "staticReveal", amp: 0.05, freq: 0.55, stag: 0.45 },
+        "Latin / Reggaeton": { prim: "kinetic", amp: 0.09, freq: 1.4, stag: 0.5 },
+        "K-Pop / J-Pop": { prim: "flipIn", amp: 0.05, freq: 1.2, stag: 0.4 },
+        "Punk": { prim: "jitter", amp: 0.09, freq: 2.6, stag: 0.0 },
+        "Blues": { prim: "wave", amp: 0.06, freq: 0.6, stag: 0.6 },
+        "Soul / Funk": { prim: "kinetic", amp: 0.09, freq: 1.1, stag: 0.5 },
+        "Ambient": { prim: "softBlur", amp: 0.055, freq: 0.25, stag: 0.7 },
+        "Disco": { prim: "spinIn", amp: 0.05, freq: 1.2, stag: 0.45 },
+        "Gospel": { prim: "riseFade", amp: 0.08, freq: 0.6, stag: 0.55 },
+        "Ska": { prim: "wobbleIn", amp: 0.05, freq: 1.5, stag: 0.5 },
+        "Industrial": { prim: "mechanical", amp: 0.08, freq: 1.2, stag: 0.5 },
+        "Hyperpop": { prim: "scatterGather", amp: 0.06, freq: 2.0, stag: 0.0 },
+        "Orchestral Film": { prim: "zoomBlur", amp: 0.08, freq: 0.35, stag: 0.6 },
+        "Trap": { prim: "dropHeavy", amp: 0.07, freq: 1.0, stag: 0.6 },
+        "Dubstep": { prim: "elastic", amp: 0.07, freq: 0.9, stag: 0.55 },
+        "Phonk": { prim: "glitch", amp: 0.09, freq: 1.7, stag: 0.0 },
+        "Shoegaze": { prim: "blurDrift", amp: 0.07, freq: 0.4, stag: 0.6 },
+        "Vaporwave": { prim: "neonFlicker", amp: 0.05, freq: 0.6, stag: 0.6 },
+        "Afrobeats": { prim: "bounce", amp: 0.10, freq: 1.3, stag: 0.5 },
+        "Grime": { prim: "popScale", amp: 0.07, freq: 1.6, stag: 0.55 },
+        "Techno": { prim: "mechanical", amp: 0.07, freq: 1.8, stag: 0.4 },
+        "House": { prim: "slideIn", amp: 0.06, freq: 1.0, stag: 0.5 },
+        "Bluegrass": { prim: "mechanical", amp: 0.06, freq: 2.2, stag: 0.35 },
+        "Chiptune / 8-Bit": { prim: "mechanical", amp: 0.08, freq: 2.6, stag: 0.3 },
+        "Post-Rock": { prim: "wave", amp: 0.08, freq: 0.3, stag: 0.65 },
+        "Acid Jazz": { prim: "swing", amp: 0.06, freq: 0.9, stag: 0.5 },
+        "Grunge": { prim: "jitter", amp: 0.08, freq: 2.0, stag: 0.0 },
+        "Mathematical Rock": { prim: "mechanical", amp: 0.07, freq: 1.5, stag: 0.6 },
+        "Emo": { prim: "blurDrift", amp: 0.05, freq: 0.45, stag: 0.55 },
+        "Flamenco": { prim: "punch", amp: 0.06, freq: 1.8, stag: 0.5 },
+        "Bossa Nova": { prim: "swing", amp: 0.045, freq: 0.7, stag: 0.55 },
+        "Dark Ambient": { prim: "blurDrift", amp: 0.06, freq: 0.2, stag: 0.7 },
+        "Future Bass": { prim: "scatterGather", amp: 0.06, freq: 1.2, stag: 0.45 },
+        "New Wave": { prim: "flipIn", amp: 0.05, freq: 1.0, stag: 0.5 },
+        "Celtic": { prim: "blurDrift", amp: 0.055, freq: 0.5, stag: 0.55 },
+        "Cyberpunk": { prim: "neonFlicker", amp: 0.05, freq: 1.6, stag: 0.0 },
+        "Opera": { prim: "unfoldV", amp: 0.07, freq: 0.4, stag: 0.6 },
+        "Ska Punk": { prim: "spinIn", amp: 0.06, freq: 1.4, stag: 0.4 },
+        // Neutral default until a genre resolves (or when none is found).
+        "Default": { prim: "staticReveal", amp: 0.04, freq: 0.5, stag: 0.45 },
+      };
+
+      // Active genre state. Set from the genre-update IPC; reset to Default on a
+      // track change. gGenreAnim is the resolved { prim, amp, freq, stag } record.
+      let gGenre = null;
+      let gGenreAnim = GENRE_ANIM.Default;
+      function setGenreAnim(name) {
+        gGenre = name || null;
+        gGenreAnim = (name && GENRE_ANIM[name]) || GENRE_ANIM.Default;
+      }
+      // Apply the active genre primitive to ONE glyph `c` (front + shadow), layered
+      // on the glyph's static baseX. `e` (0..1) is the letter's APPEARING progress —
+      // the primitive bakes the entrance + idle blend off it. Returns an opacity
+      // multiplier (blur/glow/flicker styles). No-op when animations are globally off.
+      function applyGlyphAnim(c, i, n, tSec, e) {
+        if (!ANIMATIONS_ACTIVE) return 1;
+        const P = gGenreAnim;
+        const fn = GLYPH_PRIMS[P.prim] || GLYPH_PRIMS.staticReveal;
+        const o = fn(e, tSec, i, c.seed || (c.seed = (i + 1) * 911), P);
+        const em = c.em || 1;
+        const dx = (o.dx || 0) * em, dy = (o.dy || 0) * em, dz = (o.dz || 0) * em;
+        const rot = o.rot || 0, rotX = o.rotX || 0;
+        const sx = o.sx == null ? 1 : o.sx, sy = o.sy == null ? 1 : o.sy;
+        c.front.position.set(c.baseX + dx, dy, FRONT_Z + dz);
+        c.front.rotation.set(rotX, 0, rot); c.front.scale.set(sx, sy, 1);
+        c.shadow.position.set(c.baseX + dx + SHADOW_DX, dy + SHADOW_DY, SHADOW_DZ + dz);
+        c.shadow.rotation.set(rotX, 0, rot); c.shadow.scale.set(sx, sy, 1);
+        return o.op == null ? 1 : o.op;
+      }
+
+      /* ── § DISAPPEAR (EXIT) ANIMATION ──────────────────────────────────────
+       * The mirror of the appearing engine: when a lyric line FINISHES, its letters
+       * play one of these exit primitives, driven by exit progress `x` (0 = settled,
+       * 1 = fully gone). `op` must reach 0 by x=1 so the glyph vanishes before
+       * disposal. Same return shape as the appear primitives. */
+      const EXIT_PRIMS = {
+        fadeOut: (x, t, i, s, P) => ({ dy: -x * 0.15, op: 1 - x }),
+        blurOut: (x, t, i, s, P) => { const k = x * x; return { dx: k * 0.3 * (i % 2 ? 1 : -1), dy: k * 0.2, op: Math.max(0, 1 - x * 1.1) }; },
+        riseOut: (x, t, i, s, P) => ({ dy: x * x * 0.8, op: 1 - x }),
+        fallOut: (x, t, i, s, P) => ({ dy: -x * x * 1.0, op: 1 - x }),
+        scatterOut: (x, t, i, s, P) => { const ang = rnd(s + i * 13) * TAU, d = x * x * 1.4; return { dx: Math.cos(ang) * d, dy: Math.sin(ang) * d, rot: x * (rnd(s + i * 7) - 0.5) * 3, op: 1 - x }; },
+        spinOut: (x, t, i, s, P) => { const sc = Math.max(0.02, 1 - x); return { rot: x * x * Math.PI * 3 * (i % 2 ? 1 : -1), sx: sc, sy: sc, op: 1 - x }; },
+        flipOut: (x, t, i, s, P) => ({ rotX: x * (Math.PI * 0.5) * (i % 2 ? 1 : -1), dy: x * 0.1, op: 1 - x }),
+        shrinkOut: (x, t, i, s, P) => { const sc = Math.max(0.02, 1 - x); return { sx: sc, sy: sc, op: 1 - x }; },
+        glitchOut: (x, t, i, s, P) => { const bk = Math.floor(x * 14); const j = (rnd(s + i * 7 + bk * 5) - 0.5) * x * 0.8; const fl = rnd(s + bk * 3 + i) < 0.4 ? 0.2 : 1; return { dx: j, op: (1 - x) * fl }; },
+        dissolveOut: (x, t, i, s, P) => { const jx = (rnd(s + i * 5 + Math.floor(t * 12)) - 0.5) * x * 0.3; return { dx: jx, dy: x * 0.1, op: Math.max(0, 1 - x * 1.2) }; },
+        slideOut: (x, t, i, s, P) => { const k = x * x; return { dx: k * 0.9 * (i % 2 ? 1 : -1), op: 1 - x }; },
+        neonOut: (x, t, i, s, P) => { let op; if (x < 0.6) { const fb = Math.floor(x * 12); op = rnd(s + i * 5 + fb * 11) < 0.5 ? 0.15 : 1; } else { op = Math.max(0, 1 - (x - 0.6) / 0.4); } return { op, sx: 1 + (x < 0.3 ? Math.sin((x / 0.3) * Math.PI) * 0.1 : 0) }; },
+      };
+      // Each appear primitive's matching exit (so every genre disappears in-style
+      // with no per-genre wiring). A GENRE_ANIM entry may override with an `exit` key.
+      const EXIT_BY_PRIM = {
+        bounce: "fallOut", punch: "shrinkOut", kinetic: "slideOut", glitch: "glitchOut",
+        blurDrift: "blurOut", glowPulse: "shrinkOut", swing: "riseOut", wave: "riseOut",
+        jitter: "glitchOut", mechanical: "dissolveOut", elastic: "shrinkOut", staticReveal: "fadeOut",
+        scatterGather: "scatterOut", flipIn: "flipOut", spinIn: "spinOut", neonFlicker: "neonOut",
+        softBlur: "blurOut", fadeUp: "fadeOut", driftIn: "slideOut", riseFade: "riseOut",
+        dropHeavy: "fallOut", popScale: "shrinkOut", wobbleIn: "slideOut", zoomBlur: "shrinkOut",
+        slideIn: "slideOut", unfoldV: "shrinkOut",
+      };
+      // Resolve the exit primitive fn for the CURRENT genre (snapshotted onto a line
+      // when it retires, so it disappears in its own genre's style).
+      function exitPrimFor() {
+        const P = gGenreAnim;
+        return (P.exit && EXIT_PRIMS[P.exit]) || EXIT_PRIMS[EXIT_BY_PRIM[P.prim]] || EXIT_PRIMS.fadeOut;
+      }
+      // Apply an exit primitive to ONE glyph; returns the opacity multiplier (→0).
+      function applyGlyphExit(c, i, x, tSec, fn, P) {
+        const o = fn(x, tSec, i, c.seed || (c.seed = (i + 1) * 911), P);
+        const em = c.em || 1;
+        const dx = (o.dx || 0) * em, dy = (o.dy || 0) * em, dz = (o.dz || 0) * em;
+        const rot = o.rot || 0, rotX = o.rotX || 0;
+        const sx = o.sx == null ? 1 : o.sx, sy = o.sy == null ? 1 : o.sy;
+        c.front.position.set(c.baseX + dx, dy, FRONT_Z + dz);
+        c.front.rotation.set(rotX, 0, rot); c.front.scale.set(sx, sy, 1);
+        c.shadow.position.set(c.baseX + dx + SHADOW_DX, dy + SHADOW_DY, SHADOW_DZ + dz);
+        c.shadow.rotation.set(rotX, 0, rot); c.shadow.scale.set(sx, sy, 1);
+        return o.op == null ? 1 : o.op;
+      }
+      // Advance ONE exiting line's disappear animation; returns true when fully gone.
+      function updateLineExit(line, nowS) {
+        const fn = line.exitFn || EXIT_PRIMS.fadeOut, P = line.exitP || gGenreAnim;
+        let allGone = true;
+        for (const wd of line.words) {
+          if (!wd.chars) continue;
+          const baseOp = wd.opacity != null ? wd.opacity : 1;
+          for (let ci = 0; ci < wd.chars.length; ci++) {
+            const c = wd.chars[ci];
+            let x = (nowS - (line.exitStart + ci * CHAR_STAGGER)) / DISAPPEAR_DUR;
+            x = x < 0 ? 0 : x > 1 ? 1 : x;
+            if (x < 1) allGone = false;
+            const eOp = applyGlyphExit(c, ci, x, nowS, fn, P);
+            c.front.visible = true; c.shadow.visible = true;
+            c.front.material.opacity = baseOp * FRONT_ALPHA * eOp;
+            c.shadow.material.opacity = baseOp * SHADOW_ALPHA * eOp;
+          }
+        }
+        return allGone;
+      }
 
       /* ── §10  COTODAMA HOOKS ─────────────────────────────────────────── */
       function onCotodamaNewLine(phrase) {
@@ -647,8 +1020,10 @@
         const phraseKey = (phrase.fullText || "") + "@" + (phrase.startTime || 0);
         if (phraseKey === lastPhraseKey) return;
         lastPhraseKey = phraseKey;
-        // §1 FOOLPROOF CLEAR of the previous phrase BEFORE any new geometry.
-        clearCanvasLyrics();
+        // §1 Retire the previous phrase with its genre DISAPPEAR animation (it
+        // keeps its own meshes and disposes when the exit completes), then build the
+        // new one. A brief transition overlap is intended.
+        retireActiveLineAnimated();
         const motion = latestMotion;
         // Phase 1 baseline forces the flat "block"; Phase 2 uses the BPM-locked
         // profile (resolved + frozen once per track — never per phrase).
@@ -1107,6 +1482,113 @@
         return Math.max(0, p);
       }
 
+      /* ── APPLE MUSIC MODE — DOM scrolling karaoke lyrics ───────────────────
+       * Opt-in (Settings). When ON it OVERRIDES all canvas animation: tick() skips
+       * the Three.js lyric/camera/render path and this DOM overlay renders a
+       * vertical line list that springs so the active line stays centered, with the
+       * active line's words filling charcoal left→right (karaoke) as the clock
+       * reaches them. Clean white theme. Reuses phrases[] + phraseIndexAt/wordIndexAt. */
+      let appleMode = false;
+      let amLines = [];     // [{ el, words:[{ el, time, end }] }]
+      let amActivePi = -1;  // last active phrase index (class-thrash guard)
+      let amScrollY = 0;    // current eased translateY (px)
+      let amSnap = true;    // snap (no ease) on the first frame after a (re)build
+      const AM_SCROLL_K = 6; // spring rate (1/s)
+
+      function buildAppleLyrics() {
+        if (!amInner) return;
+        amInner.textContent = "";
+        amLines = []; amActivePi = -1; amSnap = true; amScrollY = 0;
+        amInner.style.transform = "translateY(0px)";
+        const oldPh = document.getElementById("am-placeholder"); // viewport-centered, sibling of amInner
+        if (oldPh) oldPh.remove();
+        if (!phrases.length) { // no synced lyrics -> centered title + ♪
+          const ph = document.createElement("div");
+          ph.id = "am-placeholder";
+          const ttl = document.createElement("div"); ttl.className = "am-ph-title"; ttl.textContent = curTrack.title || "—";
+          const note = document.createElement("div"); note.className = "am-ph-note"; note.textContent = "♪";
+          ph.appendChild(ttl); ph.appendChild(note); amLyrics.appendChild(ph);
+          return;
+        }
+        for (let pi = 0; pi < phrases.length; pi++) {
+          const phrase = phrases[pi];
+          const line = document.createElement("div");
+          line.className = "am-line";
+          const ws = phrase.words || [];
+          const wordEls = [];
+          for (let wi = 0; wi < ws.length; wi++) {
+            const w = ws[wi];
+            const span = document.createElement("span");
+            span.className = "am-word";
+            span.textContent = w.text;
+            span.style.setProperty("--fill", "0%");
+            const end = wi + 1 < ws.length ? ws[wi + 1].time : phrase.endTime;
+            wordEls.push({ el: span, time: w.time, end: Number.isFinite(end) && end > w.time ? end : w.time + 0.6 });
+            line.appendChild(span);
+            if (wi < ws.length - 1) line.appendChild(document.createTextNode(" "));
+          }
+          if (!ws.length) line.textContent = phrase.fullText || " ";
+          amInner.appendChild(line);
+          amLines.push({ el: line, words: wordEls });
+        }
+      }
+
+      function updateAppleLyrics(t, dt) {
+        if (!amLines.length) return; // placeholder / no lyrics
+        let pi = phraseIndexAt(t);
+        if (pi < 0) pi = amActivePi >= 0 ? amActivePi : 0; // hold during gaps / lead-in
+        if (pi !== amActivePi) {
+          // Rewrite line classes + lock fills (robust to forward/back seeks).
+          for (let i = 0; i < amLines.length; i++) {
+            const L = amLines[i], isActive = i === pi, isPast = i < pi;
+            L.el.className = isActive ? "am-line active" : isPast ? "am-line past" : "am-line";
+            if (!isActive) {
+              const f = isPast ? "100%" : "0%";
+              for (const w of L.words) { w.el.style.setProperty("--fill", f); if (w.el.classList.contains("cur")) w.el.classList.remove("cur"); }
+            }
+          }
+          amActivePi = pi;
+        }
+        // Per-word karaoke fill on the active line.
+        const active = amLines[pi];
+        const wiCur = wordIndexAt(phrases[pi], t);
+        for (let wi = 0; wi < active.words.length; wi++) {
+          const w = active.words[wi];
+          let fill, cur = false;
+          if (wi < wiCur) fill = 100;
+          else if (wi === wiCur) { const d = w.end - w.time; fill = d > 0 ? Math.max(0, Math.min(1, (t - w.time) / d)) * 100 : 100; cur = true; }
+          else fill = 0;
+          w.el.style.setProperty("--fill", fill.toFixed(1) + "%");
+          if (cur !== w.el.classList.contains("cur")) w.el.classList.toggle("cur", cur);
+        }
+        // Spring-scroll so the active line's center sits at the viewport center.
+        const target = -(active.el.offsetTop + active.el.offsetHeight / 2);
+        if (amSnap) { amScrollY = target; amSnap = false; }
+        else amScrollY += (target - amScrollY) * (1 - Math.exp(-AM_SCROLL_K * dt));
+        amInner.style.transform = `translateY(${amScrollY.toFixed(1)}px)`;
+      }
+
+      // Toggle the whole mode. ON overrides + hides the canvas; OFF restores it.
+      function setAppleMode(on) {
+        appleMode = !!on;
+        try { localStorage.setItem("cotolyrics.appleMode", appleMode ? "1" : "0"); } catch (_) {}
+        if (appleToggle) appleToggle.checked = appleMode;
+        if (appleMode) {
+          clearCanvasLyrics();
+          if (exitingLines && exitingLines.length) { for (const l of exitingLines) disposeLineMeshes(l); exitingLines.length = 0; }
+          if (threeCanvas) threeCanvas.style.display = "none";
+          if (amLyrics) amLyrics.classList.remove("hidden");
+          buildAppleLyrics();
+        } else {
+          if (amLyrics) amLyrics.classList.add("hidden");
+          if (threeCanvas) threeCanvas.style.display = "";
+          // Force the canvas pipeline to rebuild the current line on the next frame.
+          currentPhraseIndex = -1; activePhraseUid = null; lastPhraseKey = "";
+        }
+      }
+      // Rebuild the Apple list whenever phrases change (no-op unless mode is on).
+      function syncAppleToPhrases() { if (appleMode) buildAppleLyrics(); }
+
       /* ── §15  ANIMATION LOOP (delta-time) ────────────────────────────── */
       let lastTickMs = performance.now();
       const camLook = { x: 0, y: 0, z: 0 }; // smoothed camera look-at target
@@ -1126,6 +1608,16 @@
         if (energy - energyAvg > 0.12) shakeEnv = 1; else shakeEnv = Math.max(0, shakeEnv - dt * 3.2);
         readDsp(tSec); // §6 spectrum/onset/BPM features
         updateLiveProfile(tSec); // follow the live tempo tier (until authoritatively locked)
+        // Ease the rendered CAMERA params toward the (now stable) profile so a
+        // tier change glides the framing in instead of jumping.
+        {
+          const tgt = PROFILE_CAMERA[renderProfile] || PROFILE_CAMERA.B;
+          const kr = 1 - Math.exp(-PROFILE_TWEEN_K * dt);
+          camK.zoomAmp += (tgt.zoomAmp - camK.zoomAmp) * kr;
+          camK.zoomRate += (tgt.zoomRate - camK.zoomRate) * kr;
+          camK.moveAmp += (tgt.moveAmp - camK.moveAmp) * kr;
+          camK.chase += (tgt.chase - camK.chase) * kr;
+        }
         if (DSP_DEBUG && nowMs - dspLogLastMs > 1000) { // ~1 Hz pipeline trace
           dspLogLastMs = nowMs;
           const est = tempoEstimator.estimate(tSec);
@@ -1136,6 +1628,13 @@
 
         // Lyric position + word firing.
         const p = posSec();
+        // APPLE MUSIC MODE overrides everything below: render the DOM karaoke list
+        // and skip the entire Three.js lyric/camera/render path for this frame.
+        if (appleMode) {
+          if (curDurationSec > 0) progressFill.style.width = Math.min(100, (p / curDurationSec) * 100).toFixed(2) + "%";
+          updateAppleLyrics(p, dt);
+          return;
+        }
         syncLyrics(p);
         if (curDurationSec > 0) progressFill.style.width = Math.min(100, (p / curDurationSec) * 100).toFixed(2) + "%";
 
@@ -1145,9 +1644,7 @@
         // Per-profile camera (Phase 1 baseline = locked dead-center).
         updateCamera(dt, tSec, nowMs);
 
-        // Word kinetics (spring pop + slide/spin entrance + opacity).
-        // Only the single active phrase is ever updated/drawn — there is no
-        // exiting-line pipeline, so old text can never overlap the new phrase.
+        // Word kinetics (appear entrance + idle + opacity) for the active phrase.
         if (activeLine) {
           updateLineWords(activeLine, dt, tSec, false);
           // §3 — angle the whole phrase dynamically on its X/Y axes. Combined with
@@ -1156,6 +1653,22 @@
           const ang = 0.09 + 0.13 * smoothEnergy; // legible 3D tilt (camera adds the drama)
           activeLine.group.rotation.y = Math.sin(tSec * 0.5) * ang;
           activeLine.group.rotation.x = Math.cos(tSec * 0.4) * ang * 0.45;
+          // Sentence-end-with-gap: once the line's time is up and no successor has
+          // replaced it (instrumental break), retire it so it DISAPPEARS at its end
+          // instead of lingering on screen through the silence.
+          if (ANIMATIONS_ACTIVE && activeLine.phrase && activeLine.phrase.endTime > 0 && p >= activeLine.phrase.endTime) {
+            retireActiveLineAnimated();
+          }
+        }
+
+        // Advance + dispose any lines playing their DISAPPEAR animation out.
+        if (exitingLines.length) {
+          const nowS = nowMs / 1000;
+          for (let k = exitingLines.length - 1; k >= 0; k--) {
+            const line = exitingLines[k];
+            const done = updateLineExit(line, nowS);
+            if (done) { disposeLineMeshes(line); exitingLines.splice(k, 1); }
+          }
         }
 
         updatePointCloud(dt, tSec);
@@ -1163,9 +1676,10 @@
       }
 
       function updateLineWords(line, dt, tSec, exiting) {
-        // BPM-locked tier drives the alpha-ease speed + the active-word energy.
-        const K = PROFILE_KINETICS[renderProfile] || PROFILE_KINETICS.B;
-        const opacRate = 1 - Math.exp(-OPAC_K * K.opac * dt);
+        // Reveal alpha-ease is now a CONSTANT — the BPM tier no longer touches the
+        // letters (it drives only the camera). Per-letter motion is the genre
+        // engine's job (applyGlyphAnim below).
+        const opacRate = 1 - Math.exp(-OPAC_K * dt);
         const nowS = performance.now() / 1000; // wall clock — matches the wd.born stamp
         for (const wd of line.words) {
           // ── REVEAL OPACITY (the sequence print). The ACTIVE word reveals its
@@ -1178,18 +1692,31 @@
           wd.opacity += (tgt - wd.opacity) * opacRate;
           const wordVis = wd.opacity > 0.004;
           const stagger = ANIMATIONS_ACTIVE && !exiting && wd.state === "active";
-          const elapsed = stagger ? nowS - (wd.born || nowS) : 0;
-          for (let ci = 0; ci < wd.chars.length; ci++) {
+          const born = wd.born || nowS;
+          const elapsed = stagger ? nowS - born : 0;
+          const nChars = wd.chars.length;
+          for (let ci = 0; ci < nChars; ci++) {
             const c = wd.chars[ci];
-            let rev = 1; // per-glyph reveal multiplier (1 = fully shown)
+            let rev = 1; // per-glyph OPACITY reveal multiplier (fast, REVEAL_RAMP)
             if (stagger) {
               rev = (elapsed - ci * CHAR_STAGGER) / REVEAL_RAMP;
               rev = rev < 0 ? 0 : rev > 1 ? 1 : rev;
             }
             const cvis = stagger ? rev > 0.001 : wordVis;
             c.front.visible = cvis; c.shadow.visible = cvis;
-            c.front.material.opacity = wd.opacity * FRONT_ALPHA * rev;
-            c.shadow.material.opacity = wd.opacity * SHADOW_ALPHA * rev;
+            // APPEARING progress `e` (slower than the opacity ramp): each letter's
+            // entrance plays over ENTRANCE_DUR from its own staggered birth, so the
+            // glyph keeps moving into place after it's already visible, then settles.
+            let e = 1;
+            if (ANIMATIONS_ACTIVE) {
+              e = (nowS - (born + ci * CHAR_STAGGER)) / ENTRANCE_DUR;
+              e = e < 0 ? 0 : e > 1 ? 1 : e;
+            }
+            // GENRE per-letter animation: drives the entrance + subtle idle, returns
+            // an opacity multiplier (blur/glow/flicker styles dim/flicker).
+            const gOp = applyGlyphAnim(c, ci, nChars, tSec, e);
+            c.front.material.opacity = wd.opacity * FRONT_ALPHA * rev * gOp;
+            c.shadow.material.opacity = wd.opacity * SHADOW_ALPHA * rev * gOp;
           }
 
           // ── WORD-GROUP TRANSFORM. Glyphs are STATIC inside the group; only the
@@ -1201,24 +1728,12 @@
             wd.posCur.x = wd.target.x; wd.posCur.y = wd.target.y; wd.posCur.z = wd.target.z;
             wd.rotCur = 0; wd.scaleCur = wd.baseScale;
           }
-          let px = wd.posCur.x, py = wd.posCur.y, pz = wd.posCur.z;
-          let scale = wd.scaleCur;
-
-          // ── ACTIVE-WORD HIGH-ENERGY LAYER (184 BPM Intense = profile D): a fast
-          //    rhythmic PULSE on scale + an erratic ~30 Hz positional VIBRATE on the
-          //    whole word. Past/future words stay calm and legible — only the
-          //    currently sung word snaps, pulses and rattles.
-          if (ANIMATIONS_ACTIVE && wd.state === "active") {
-            const pulse = 1 + Math.sin(tSec * (6 + 7 * K.freq)) * (0.03 + 0.05 * K.idle);
-            scale *= pulse;
-            const f = Math.floor(tSec * 30); // reshuffle window -> buzzing vibration
-            const amp = wd.emSize * (0.03 + 0.12 * K.chaos);
-            px += (rnd(wd.seed + f) - 0.5) * amp;
-            py += (rnd(wd.seed + f + 17) - 0.5) * amp;
-          }
-          wd.group.position.set(px, py, pz);
+          // The word group only slides to its layout target + the neutral spring
+          // "Pop" on activation (applyKineticTransforms). No BPM shake/pulse/vibrate
+          // here anymore — letter motion is the genre engine, camera is the BPM tier.
+          wd.group.position.set(wd.posCur.x, wd.posCur.y, wd.posCur.z);
           wd.group.rotation.z = wd.rotCur;
-          wd.group.scale.setScalar(Math.max(0.001, scale));
+          wd.group.scale.setScalar(Math.max(0.001, wd.scaleCur));
         }
         return false;
       }
@@ -1243,64 +1758,102 @@
         wd.scaleCur += wd.scaleVel * dt;
       }
 
-      /* ── PER-PROFILE CAMERA (3 tiers) ────────────────────────────────────
-       * A calm: gentle infinity-loop pan · B pop: smooth ORBITAL sweep · D
-       * intense: snappy word-CHASE + transient jitter rattle. Phase 1 (flag off)
-       * keeps the camera dead-centered. The locked BPM tier picks the branch. */
+      /* ── PER-TIER CAMERA (BPM = camera/zoom ONLY) ────────────────────────
+       * A calm: gentle infinity-loop pan + faint breath · B pop: DOLLY-ZOOM into
+       * the lyric, then repeat (the signature move) · D intense: snappy word-CHASE
+       * + deeper dolly. NO shake/rattle in any tier — that motion is gone. Phase 1
+       * (flag off) keeps the camera dead-centered. Eased camK ramps tier changes. */
+      // World-space center of the CURRENTLY-REVEALING letter of the active word —
+      // the letter-by-letter follow target. The active word reveals its glyphs
+      // left→right (CHAR_STAGGER apart from wd.born), so flooring the elapsed time
+      // gives the letter the camera should be on right now. Falls back to the word,
+      // then the line center.
+      function activeLetterCenter() {
+        const l = activeLine;
+        if (!l || l.activeIdx < 0 || !l.words[l.activeIdx]) return { x: 0, y: 0 };
+        const wd = l.words[l.activeIdx];
+        const bx = l.group.position.x + wd.posCur.x, by = l.group.position.y + wd.posCur.y;
+        if (!wd.chars || !wd.chars.length) return { x: bx + wd.width * 0.5 * wd.scaleCur, y: by };
+        const elapsed = performance.now() / 1000 - (wd.born || 0);
+        let li = Math.floor(elapsed / CHAR_STAGGER);
+        li = li < 0 ? 0 : li >= wd.chars.length ? wd.chars.length - 1 : li;
+        const c = wd.chars[li];
+        // baseX is the glyph's left edge in the word group; nudge to its rough center.
+        return { x: bx + ((c.baseX || 0) + (l.emSize || 1) * 0.3) * wd.scaleCur, y: by };
+      }
+      // Stable x/y extent of the whole line from its layout targets (+ a glyph pad),
+      // so the camera can cap its zoom + clamp its pan to keep every word on screen.
+      function lineExtent(l) {
+        let mnx = Infinity, mxx = -Infinity, mny = Infinity, mxy = -Infinity;
+        for (const wd of l.words) {
+          const x0 = wd.target.x, x1 = wd.target.x + wd.width * wd.baseScale, y = wd.target.y;
+          if (x0 < mnx) mnx = x0; if (x1 > mxx) mxx = x1;
+          if (y < mny) mny = y; if (y > mxy) mxy = y;
+        }
+        if (!isFinite(mnx)) return { mnx: -halfW, mxx: halfW, mny: -halfH, mxy: halfH };
+        const pad = l.emSize || 1;
+        return { mnx: mnx - pad * 0.25, mxx: mxx + pad * 0.25, mny: mny - pad * 0.85, mxy: mxy + pad * 0.45 };
+      }
+      // A smooth, NON-random ease-in→out→repeat factor (0→1→0) at `rate` rad/s.
+      function zoomCycle(tSec, rate) { return 0.5 - 0.5 * Math.cos(tSec * rate); }
+      const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
+
+      /* ── PER-TIER CAMERA — LETTER-BY-LETTER FOLLOW + framed dolly-zoom ────
+       * The camera pans to track the currently-sung LETTER (not the whole word, so
+       * it no longer jumps word-to-word) and dollies in/out per tier. Both the pan
+       * AND the zoom are clamped to the line's real extent, so a word can NEVER be
+       * pushed off the edge. Camera looks straight ahead (the line's own tilt gives
+       * the 3D depth), which guarantees the framed region == what's clamped. */
       function updateCamera(dt, tSec, nowMs) {
         if (!ANIMATIONS_ACTIVE) { camera.position.set(0, 0, CAM_Z); camera.lookAt(0, 0, 0); return; }
-        const prof = activeLine ? activeLine.profile : "A";
-
-        // D (intense) — aggressively chase the active word + add jitter rattle.
-        if (prof === "D" && activeLine && activeLine.activeIdx >= 0 && activeLine.words[activeLine.activeIdx]) {
-          const wd = activeLine.words[activeLine.activeIdx];
-          const tx = activeLine.group.position.x + wd.posCur.x + wd.width * 0.5 * wd.scaleCur;
-          const ty = activeLine.group.position.y + wd.posCur.y;
-          const tz = wd.posCur.z;
-          const kl = 1 - Math.exp(-9 * dt);
-          camLook.x += (tx - camLook.x) * kl;
-          camLook.y += (ty - camLook.y) * kl;
-          camLook.z += (tz - camLook.z) * kl;
-          let jx = 0, jy = 0, jz = 0;
-          if (shakeEnv > 0.02) {
-            const amp = (0.35 + latestMotion.shake * 2.5) * shakeEnv; // speaker-cabinet rattle
-            jx = Math.sin(nowMs * 0.13) * amp;
-            jy = Math.cos(nowMs * 0.17) * amp;
-            jz = Math.sin(nowMs * 0.2) * amp * 0.5;
-          }
-          const kp = 1 - Math.exp(-10 * dt); // very snappy chase
-          const cpx = camLook.x + Math.sin(tSec * 2.4) + jx;
-          const cpy = camLook.y + 0.5 + jy;
-          const cpz = camLook.z + (CAM_Z - 6) + jz;
-          camera.position.x += (cpx - camera.position.x) * kp;
-          camera.position.y += (cpy - camera.position.y) * kp;
-          camera.position.z += (cpz - camera.position.z) * kp;
-          camera.lookAt(camLook.x, camLook.y, camLook.z);
+        if (!activeLine) {
+          // Gap between lines — glide gently back to a centered, full frame.
+          const k = 1 - Math.exp(-3 * dt);
+          camLook.x += (0 - camLook.x) * k; camLook.y += (0 - camLook.y) * k;
+          camera.position.x += (0 - camera.position.x) * k;
+          camera.position.y += (0 - camera.position.y) * k;
+          camera.position.z += (CAM_Z - camera.position.z) * k;
+          camera.lookAt(camLook.x, camLook.y, 0);
           return;
         }
+        const prof = activeLine.profile;
 
-        // A / B — relax the look target back toward the origin.
-        const kl = 1 - Math.exp(-4 * dt);
-        camLook.x += (0 - camLook.x) * kl;
-        camLook.y += (0 - camLook.y) * kl;
-        camLook.z += (0 - camLook.z) * kl;
+        // 1) LETTER FOLLOW — ease the look point toward the current letter (snappier
+        //    for the intense tier so it keeps up; gentle for calm).
+        const lc = activeLetterCenter();
+        const kl = 1 - Math.exp(-(prof === "D" ? 7 : 4.5) * dt);
+        camLook.x += (lc.x - camLook.x) * kl;
+        camLook.y += (lc.y - camLook.y) * kl;
 
-        let cx = 0, cy = 0, cz = CAM_Z;
-        if (prof === "B") {
-          // B (pop) — smooth orbital sweep around the phrase in the X/Z plane.
-          const sp = 0.35 + smoothEnergy * 0.4;
-          const R = 2.4 + smoothEnergy * 1.2;
-          cx = Math.sin(tSec * sp) * R;
-          cz = CAM_Z - 1 + Math.cos(tSec * sp) * R * 0.6;
-          cy = Math.sin(tSec * sp * 0.5) * 0.6;
-        } else {
-          // A (calm) — slow infinity-loop (lemniscate) pan.
-          const s = tSec * 0.22;
-          cx = Math.sin(s) * 1.1;
-          cy = Math.sin(s * 2) * 0.55;
-        }
-        camera.position.set(cx, cy, cz);
-        camera.lookAt(camLook.x, camLook.y, camLook.z);
+        // 2) DOLLY-ZOOM — in→out→repeat, but capped so the WHOLE line always fits.
+        const ext = lineExtent(activeLine);
+        const lineHalfW = Math.max(0.6, (ext.mxx - ext.mnx) / 2);
+        const lineHalfH = Math.max(0.4, (ext.mxy - ext.mny) / 2);
+        const fitCz = CAM_Z * Math.max(lineHalfW / halfW, lineHalfH / halfH) * 1.12;
+        const dolly = camK.zoomAmp * zoomCycle(tSec, camK.zoomRate);
+        let cz = CAM_Z - dolly;
+        if (cz < fitCz) cz = fitCz;          // never zoom in past where the line fits
+        const visW = halfW * cz / CAM_Z, visH = halfH * cz / CAM_Z; // visible half-extents at cz
+
+        // 3) PAN FOLLOW toward the letter, then CLAMP so both edges stay in frame.
+        const lean = prof === "D" ? 0.6 : prof === "B" || prof === "C" ? 0.45 : 0.22;
+        const lineCx = (ext.mnx + ext.mxx) / 2, lineCy = (ext.mny + ext.mxy) / 2;
+        let cx = lineCx + (camLook.x - lineCx) * lean;
+        let cy = lineCy + (camLook.y - lineCy) * lean;
+        if (prof === "A") { const s = tSec * 0.2; cx += Math.sin(s) * 0.4; cy += Math.sin(s * 2) * 0.25; }
+        else if (prof === "D") { cx += Math.sin(tSec * 1.3) * 0.25; } // gentle sway (a move, not a shake)
+        // window [cx-visW, cx+visW] must contain [mnx, mxx] -> cx ∈ [mxx-visW, mnx+visW]
+        const cxLo = ext.mxx - visW, cxHi = ext.mnx + visW;
+        cx = cxLo <= cxHi ? clamp(cx, cxLo, cxHi) : lineCx;
+        const cyLo = ext.mxy - visH, cyHi = ext.mny + visH;
+        cy = cyLo <= cyHi ? clamp(cy, cyLo, cyHi) : lineCy;
+
+        // 4) Ease the body and look straight ahead (framed region == clamp above).
+        const kp = 1 - Math.exp(-(prof === "D" ? 8 : 5) * dt);
+        camera.position.x += (cx - camera.position.x) * kp;
+        camera.position.y += (cy - camera.position.y) * kp;
+        camera.position.z += (cz - camera.position.z) * kp;
+        camera.lookAt(camera.position.x, camera.position.y, 0);
       }
       tick();
 
@@ -1459,27 +2012,21 @@
           curTrackKey = key; curTrack = { title, artist, album };
           learnedThisTrack = false; dspStableSince = 0; dspStableVal = 0; // §learn — re-arm per track
           tempoEstimator.reset(); lastOnsetSec = -1; onsetTimes.length = 0; // clear tempo state so the old track can't bleed in
-          dspBpm = 0; dspBpmRaw = 0; liveTierCand = null; renderProfile = "B"; // reset the live tier to neutral until the new estimate settles
+          dspBpm = 0; dspBpmRaw = 0; liveTierCand = null; liveTierCandSince = 0; renderProfile = "B"; // reset the live tier to neutral until the new estimate settles
+          Object.assign(camK, PROFILE_CAMERA.B); // start camera neutral; tween into the detected tier
+          if (!gGenreOverride) setGenreAnim(null); // reset letter animation to neutral until the genre resolves
           songTitleEl.textContent = (title || "—").toUpperCase();
           songArtistEl.textContent = artist || "—";
           phrases = []; trackLyricIntensity = 0;
+          syncAppleToPhrases(); // Apple mode: show the new-track placeholder until lyrics arrive
           resetLyricState(); // also releases the BPM profile lock for a clean re-resolve
           // PRIMARY tempo source: instant local-dictionary lookup. If known, LOCK
           // the tier immediately (renderProfile drives the kinetics from frame one),
           // bypassing the silent-intro limitation of the live audio estimator.
+          // Unknown tracks fall through to the live dspBpm estimator (no network).
           trackBpmOverride = lookupTempoLocal(title, artist);
           if (trackBpmOverride) {
             lockProfile(profileFromBpm(trackBpmOverride, 0), trackBpmOverride);
-          } else if (GETSONGBPM_KEY) {
-            // SECONDARY: best-effort web lookup; applied only if it returns before
-            // the first phrase locks (and still on the same track).
-            const t = title, a = artist;
-            lookupTempoApi(t, a).then((bpm) => {
-              if (bpm && t === curTrack.title && a === curTrack.artist && !lockedProfile) {
-                trackBpmOverride = bpm;
-                lockProfile(profileFromBpm(bpm, 0), bpm);
-              }
-            });
           }
           // LYRIC SOURCE PRIORITY: a hand-authored local word-timestamp entry wins
           // (exact vocal timing, zero network); otherwise fall through to LRCLIB.
@@ -1508,7 +2055,8 @@
           const lbl = dspBpm > 0 ? TIER_NAMES[renderProfile] || renderProfile : (analyser ? "listening" : "no audio");
           tier = ` · ~${dspBpm || 0}bpm ${lbl} (raw ${dspBpmRaw || 0}, ${rate.toFixed(1)}/s)`;
         }
-        setStatus((playing ? "Playing" : "Paused") + " · SMTC" + tier);
+        const genreLbl = gGenre ? ` · ${gGenre}` : "";
+        setStatus((playing ? "Playing" : "Paused") + " · SMTC" + tier + genreLbl);
       }
       function resetLyricState() {
         retireActiveLine();
@@ -1561,6 +2109,7 @@
         phrases = buildPhrasesFromLocal(entry, curDurationSec);
         trackLyricIntensity = lyricTheme(phrases.map((p) => p.fullText).join(" "));
         resetLyricState();
+        syncAppleToPhrases();
         setStatus("Lyrics (local) · SMTC");
       }
 
@@ -1619,11 +2168,12 @@
         phrases = parsed.phrases;
         trackLyricIntensity = lyricTheme(phrases.map((p) => p.fullText).join(" "));
         resetLyricState();
+        syncAppleToPhrases();
         setStatus("Lyrics synced · SMTC");
       }
       function noLyrics(msg) {
         // No lyrics -> clear text; the instrumental visualizer takes over.
-        phrases = []; trackLyricIntensity = 0; resetLyricState(); setStatus(msg + " · visualizer");
+        phrases = []; trackLyricIntensity = 0; resetLyricState(); syncAppleToPhrases(); setStatus(msg + " · visualizer");
       }
       async function fetchLyrics(title, artist, album, id) {
         const durSec = curDurationSec > 0 ? Math.round(curDurationSec) : 0;
@@ -1653,12 +2203,64 @@
         else if (e.code === "KeyR" && curTrack.title) { scheduleLyricFetch(curTrack.title, curTrack.artist, curTrack.album); }
       });
 
+      /* ── §19b  SETTINGS PANEL + CUSTOM FONT ──────────────────────────────
+       * The gear by the status bar toggles a small panel. The user can load their
+       * own .ttf/.otf as the lyrics face: it's parsed in-place with the already-
+       * loaded opentype global (no network), applied to the live line immediately,
+       * and persisted to userData via IPC so it survives a restart. */
+      function applyCustomFont(font, name) {
+        customFont = font;
+        customFontName = name || customFontName;
+        if (fontNameEl) fontNameEl.textContent = customFontName;
+        // Re-render the on-screen line in the new font (defeating the build-once
+        // guard); every later line picks it up through fontFor() naturally.
+        if (activeLine && activeLine.phrase) { lastPhraseKey = ""; onCotodamaNewLine(activeLine.phrase); }
+      }
+      if (settingsBtn && settingsPanel) {
+        settingsBtn.addEventListener("click", () => settingsPanel.classList.toggle("hidden"));
+      }
+      // Apple Music Lyrics toggle — restore the saved preference, then wire changes.
+      if (appleToggle) {
+        appleToggle.addEventListener("change", () => setAppleMode(appleToggle.checked));
+        try { if (localStorage.getItem("cotolyrics.appleMode") === "1") setAppleMode(true); } catch (_) {}
+      }
+      if (fontUploadBtn && fontFileInput) {
+        fontUploadBtn.addEventListener("click", () => fontFileInput.click());
+        fontFileInput.addEventListener("change", async (e) => {
+          const file = e.target.files && e.target.files[0];
+          if (!file) return;
+          try {
+            const buf = await file.arrayBuffer();
+            const font = opentype.parse(buf); // throws on an unsupported/corrupt file
+            const nm = (font.names && (font.names.fullName?.en || font.names.fontFamily?.en)) || file.name;
+            applyCustomFont(font, nm);
+            try { window.cotodama?.saveFont?.(file.name, new Uint8Array(buf)); } catch (_) {} // persist (no-op without the bridge)
+          } catch (err) {
+            showError("Couldn't load that font file.");
+          } finally {
+            fontFileInput.value = ""; // allow re-selecting the same file later
+          }
+        });
+      }
+
       /* ── §20  STARTUP: fonts + sources ───────────────────────────────── */
       Promise.allSettled([loadFont(F.montLight), loadFont(F.montBold), loadFont(F.montBlack), loadFont(F.cormLight), loadFont(F.cormBold)])
         .then((res) => {
           if (res.some((r) => r.status === "fulfilled")) fontsReady = true;
           else showError("Font load failed — check network.");
         });
+
+      // Restore a previously-uploaded custom lyrics font (persisted in userData).
+      if (window.cotodama && typeof window.cotodama.loadFont === "function") {
+        window.cotodama.loadFont().then((saved) => {
+          if (!saved || !saved.bytes) return;
+          try {
+            const u8 = saved.bytes instanceof Uint8Array ? saved.bytes : new Uint8Array(saved.bytes);
+            const ab = u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength);
+            applyCustomFont(opentype.parse(ab), saved.name);
+          } catch (_) { /* ignore a corrupt saved font */ }
+        }).catch(() => {});
+      }
 
       // Windows SMTC is the single source of truth (Spotify / Apple Music /
       // browsers), forwarded over IPC from main.
@@ -1668,11 +2270,10 @@
         setStatus("No detection bridge");
       }
 
-      // §1 — backend BPM waterfall (Layer 1 dictionary + Layer 3 GetSongBPM)
-      // resolved in the main process and pushed here once per track. Layer 4
-      // (live dspBpm) stays the renderer-side fallback. The instant local lock on
-      // track change still fires first; this IPC value reinforces it and supplies
-      // network tempos the renderer can't fetch itself under app:// CORS.
+      // §1 — backend BPM waterfall (local dictionary + SQLite cache) resolved in
+      // the main process and pushed here once per track. The live dspBpm estimator
+      // stays the renderer-side fallback for unknown tracks. The instant local lock
+      // on track change still fires first; this IPC value reinforces it.
       if (window.cotodama && typeof window.cotodama.onBpmUpdate === "function") {
         window.cotodama.onBpmUpdate((incomingData) => {
           // §3 — aggressive exception gate: a bad payload or a profile-mapping
@@ -1694,6 +2295,49 @@
           }
         });
       }
+
+      // §genre — canonical genre resolved in main from Last.fm tags, pushed once
+      // per track. Sets the per-letter animation (unless a dev override is active).
+      let gGenreOverride = false;
+      if (window.cotodama && typeof window.cotodama.onGenreUpdate === "function") {
+        window.cotodama.onGenreUpdate((p) => {
+          try {
+            if (!p || !p.genre || gGenreOverride) return;
+            // Apply only for the still-current track.
+            if (p.title === curTrack.title && p.artist === curTrack.artist) {
+              setGenreAnim(p.genre);
+              console.log(`[Genre] ${p.genre} -> ${gGenreAnim.prim} entrance [${p.source}]`);
+            }
+          } catch (err) { console.error("[Genre IPC error]", err); }
+        });
+      }
+
+      // DEV OVERRIDE — force a genre for reviewing the 50 animations without a live
+      // Last.fm hit: append ?genre=Metal (exact canonical name) to the URL, or call
+      // setGenre("Metal") / setGenre(null) in the console. Override pins the genre
+      // across track changes until cleared with setGenre(null).
+      window.setGenre = (name) => {
+        gGenreOverride = !!name;
+        setGenreAnim(name);
+        console.log(name ? `[Genre] dev override -> ${name} (${gGenreAnim.prim})` : "[Genre] dev override cleared");
+        return name;
+      };
+      // DEV: preview ANY of the 16 primitives directly (independent of a matching
+      // genre), e.g. setAnim("flipIn") / setAnim("scatterGather", { amp:0.08, freq:2 }).
+      // setAnim(null) clears. Pins like setGenre until cleared.
+      window.setAnim = (prim, opts) => {
+        if (!prim) { gGenreOverride = false; setGenreAnim(null); console.log("[Genre] dev anim cleared"); return null; }
+        if (!GLYPH_PRIMS[prim]) { console.warn(`[Genre] unknown primitive "${prim}". Options: ${Object.keys(GLYPH_PRIMS).join(", ")}`); return null; }
+        gGenreOverride = true;
+        gGenre = `dev:${prim}`;
+        gGenreAnim = Object.assign({ prim, amp: 0.06, freq: 1.2, stag: 0.5 }, opts || {});
+        console.log(`[Genre] dev anim -> ${prim}`, gGenreAnim);
+        return prim;
+      };
+      try {
+        const qp = new URLSearchParams(location.search).get("genre");
+        if (qp) window.setGenre(qp);
+      } catch (_) {}
     </script>
   </body>
 </html>

@@ -28,6 +28,14 @@ contextBridge.exposeInMainWorld("cotodama", {
     ipcRenderer.on("bpm-update", h);
     return () => ipcRenderer.removeListener("bpm-update", h);
   },
+  // §genre — Last.fm-resolved canonical genre for the current track:
+  // { title, artist, genre, animation, source, tags }. Resolved once per track in
+  // main and pushed here; drives the per-letter animation. Returns an unsubscribe fn.
+  onGenreUpdate: (cb) => {
+    const h = (_e, payload) => cb(payload);
+    ipcRenderer.on("genre-update", h);
+    return () => ipcRenderer.removeListener("genre-update", h);
+  },
   // §learn — ship a settled dspBpm estimate for an UNKNOWN track to main, which
   // appends it to the persistent bpm-dictionary.json (fire-and-forget).
   learnBpm: (title, artist, bpm) => ipcRenderer.send("learn-bpm", { title, artist, bpm }),
@@ -36,4 +44,9 @@ contextBridge.exposeInMainWorld("cotodama", {
   // Resolves to { bpm:int, year:int|null } or null (caller then falls to live
   // dspBpm). Frontend stays clean either way.
   getBpm: (title, artist) => ipcRenderer.invoke("music-database:get-bpm", title, artist),
+  // §settings — persist / restore the user's uploaded lyrics font. saveFont ships
+  // the raw bytes to main (written under userData); loadFont returns { name, bytes }
+  // or null. Bytes cross the bridge as a Uint8Array.
+  saveFont: (name, bytes) => ipcRenderer.invoke("settings:save-font", { name, bytes }),
+  loadFont: () => ipcRenderer.invoke("settings:load-font"),
 });
