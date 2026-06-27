@@ -549,7 +549,8 @@ function maybeResolveGenre(obj) {
       console.log(`[Genre] ${title} - ${artist} -> ${r.genre} (${r.animation}) [${provider}/${r.source}${r.matched ? ":" + r.matched : ""}] tags=${tags.slice(0, 5).join(", ") || "—"}`);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("genre-update", {
-          title, artist, genre: r.genre, animation: r.animation, source: provider, tags: tags.slice(0, 5),
+          title, artist, genre: r.genre, animation: r.animation, source: provider,
+          matchSource: r.source, tags: tags.slice(0, 5), // matchSource: alias|deberta|fallback (tag confidence)
         });
       }
     })
@@ -598,9 +599,10 @@ function createWindow() {
   // Mirror renderer console to the main-process stdout so `npm start` shows the
   // live DSP/BPM diagnostics (and any renderer error) in the terminal — the
   // renderer's own DevTools console is otherwise invisible to a CLI launch.
-  // Forwards our [DSP]/[BPM]/[CotoLyrics] traces plus all warnings/errors.
+  // Forwards our [DSP]/[BPM]/[Genre]/[Genre AI]/[CotoLyrics] traces plus all
+  // warnings/errors. (\b after "Genre" matches both "[Genre]" and "[Genre AI]".)
   mainWindow.webContents.on("console-message", (_e, level, message) => {
-    if (level >= 2 || /^\[(DSP|BPM|CotoLyrics)\b/.test(message)) {
+    if (level >= 2 || /^\[(DSP|BPM|Genre|CotoLyrics)\b/.test(message)) {
       const tag = level >= 3 ? "ERROR" : level === 2 ? "warn" : "log";
       console.log(`[renderer:${tag}] ${message}`);
     }

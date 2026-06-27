@@ -1,6 +1,6 @@
 {
   "name": "cotodama-lyric-speaker",
-  "version": "0.10.0-alpha",
+  "version": "0.40.0",
   "description": "Passive desktop Cotodama-style lyric speaker: auto-detects playing music (Windows SMTC + optional AirPlay 2 sidecar), fetches synced lyrics from LRCLIB, and renders word-by-word kinetic typography in Three.js.",
   "main": "main.js",
   "scripts": {
@@ -11,6 +11,7 @@
     "test": "node -e \"require('./genre-map.js'); console.log('genre-map ok')\""
   },
   "dependencies": {
+    "@huggingface/transformers": "^4.2.0",
     "better-sqlite3": "^12.11.1",
     "three": "^0.163.0"
   },
@@ -27,24 +28,39 @@
       "index.html",
       "bpm-estimator.js",
       "genre-map.js",
+      "ai-genre-worker.js",
       "mood-engine.js",
       "music-database.js",
       "db-ingest-worker.js",
       "node_modules/three/build/three.module.js",
       "node_modules/better-sqlite3/**/*",
       "node_modules/bindings/**/*",
-      "node_modules/file-uri-to-path/**/*"
+      "node_modules/file-uri-to-path/**/*",
+      "models/**/*",
+      "node_modules/@huggingface/transformers/dist/transformers.min.js",
+      "node_modules/onnxruntime-web/dist/*.mjs",
+      "node_modules/onnxruntime-web/dist/*.wasm"
     ],
     "extraResources": [
       "smtc-bridge.ps1"
     ],
     "win": {
       "target": [
+        "nsis",
         "portable"
       ]
     },
     "portable": {
       "artifactName": "CotoLyrics-${version}-portable.exe"
+    },
+    "nsis": {
+      "artifactName": "CotoLyrics-${version}-setup.exe",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "CotoLyrics"
     }
   },
   "keywords": [

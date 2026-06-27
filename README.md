@@ -19,7 +19,24 @@ app and CotoLyrics does the rest.
 - **Beat-aware animation:** the tempo is resolved per track and locked to one of
   three motion profiles (calm → groovy → intense).
 - **Live audio analysis** of system loopback drives the beat/energy reactions.
-- **Genre-aware letter animation** — genre detected keyless via iTunes (optional Last.fm).
+- **Genre-aware letter animation** — genre detected keyless via iTunes (optional Last.fm),
+  optionally sharpened by an **on-device AI** model.
+- **Apple Music–style lyrics mode** (optional) — a clean white scrolling karaoke view
+  with smooth spring-scroll, depth-of-field blur, and a soft glow on the line you're reading.
+
+---
+
+## What's new in 0.40.0
+
+- **On-device AI genre detection.** A bundled **DeBERTa-v3-XSmall** zero-shot model
+  classifies the track's genre tags and combines with the iTunes/Last.fm result for a
+  higher-accuracy pick. Runs **fully offline** — the model ships inside the app, nothing
+  is fetched at runtime. Toggle it on under **Settings → On-device AI**.
+- **Apple Music lyrics polish.** The optional scrolling lyrics view now has a
+  GPU-smooth spring-scroll, a depth-of-field blur (lines blur toward the top/bottom,
+  sharpen at center), and a soft reading glow on the centered line.
+- **Installer + portable builds.** `npm run build` now produces both a Windows
+  **installer** (`CotoLyrics-0.40.0-setup.exe`) and a **portable** single-exe.
 
 ---
 
@@ -62,6 +79,16 @@ visualizer instead of showing text.
 | `R` | Re-fetch lyrics for the current track |
 
 The lyric offset is shown briefly in the status bar each time you adjust it.
+
+### Settings (⚙ bottom-right)
+
+| Toggle | What it does |
+|--------|--------------|
+| **Apple Music Lyrics** | Switch from the Three.js kinetic canvas to a white, vertically-scrolling karaoke view (depth-of-field blur + reading glow). |
+| **On-device AI** | Enable the bundled DeBERTa-v3-XSmall model to refine genre detection (combined with the iTunes/Last.fm tags). Off = tags only. Runs locally, offline. |
+| **Upload font…** | Use your own `.ttf`/`.otf` for the lyrics typography. |
+
+Both toggles are remembered between launches.
 
 ## Motion tiers (BPM → animation)
 
@@ -112,6 +139,19 @@ LASTFM_API_KEY=your_api_key_here
 When a Last.fm key is present it is tried first (more granular subgenres); otherwise the
 app falls back to the keyless iTunes lookup.
 
+#### On-device AI refinement (optional)
+
+Turn on **Settings → On-device AI** to add a bundled **DeBERTa-v3-XSmall** zero-shot
+classifier. It reads the track's genre **tags** (not the lyrics — short input keeps it
+fast) and maps them onto one of the 50 canonical genres, then **combines** with the
+alias-matched tag genre using a confidence-weighted prior. When the tag lookup is
+confident the AI mostly reinforces it; when the tags are weak or unmatched, the AI
+decides. This is the on-device fill-in for the original `genre-map.js` classifier seam.
+
+Everything runs **locally and offline** — the quantized model, tokenizer, and ONNX
+runtime are bundled under [`models/`](models/) and `onnxruntime-web` and served to a
+Web Worker over the `app://` scheme. Nothing is downloaded at runtime.
+
 ### Hand-authored lyric timing (optional)
 
 For perfect, vocal-matched timing on a specific track, add an entry to
@@ -133,10 +173,20 @@ When present, this overrides the online lyric fetch for that track.
 ## Building a standalone app
 
 ```bash
-npm run dist:portable   # single portable Windows .exe (dist/)
+npm run build           # installer + portable (dist/)
 # or
-npm run build           # full electron-builder output
+npm run dist:portable   # portable single .exe only
 ```
+
+`npm run build` produces both Windows targets in `dist/`:
+
+| File | Type |
+|------|------|
+| `CotoLyrics-0.40.0-setup.exe` | Installer (pick folder, desktop + Start-menu shortcuts) |
+| `CotoLyrics-0.40.0-portable.exe` | Portable — run anywhere, no install |
+
+> The build bundles the on-device AI model + ONNX runtime, so the artifacts are
+> ~225 MB. They run fully offline.
 
 ## How it works
 
@@ -147,7 +197,10 @@ npm run build           # full electron-builder output
   the app as JSON.
 - **`preload.js`** — the secure IPC bridge between main and renderer.
 - **`index.html`** — the Three.js renderer: glyph layout, the word-level timeline
-  reveal engine, the BPM-locked motion profiles, and the live audio DSP.
+  reveal engine, the BPM-locked motion profiles, the live audio DSP, and the optional
+  Apple Music scrolling-lyrics mode (spring-scroll + depth-of-field blur + reading glow).
+- **`genre-map.js`** — collapses provider tags into one of the 50 canonical genres.
+- **`ai-genre-worker.js`** — the on-device DeBERTa-v3-XSmall zero-shot genre worker.
 - **`mood-engine.js`** — maps lyric/audio mood to motion parameters.
 
 ## Troubleshooting

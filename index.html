@@ -85,7 +85,8 @@
       .am-line { font-family: "MontserratAM","Helvetica Neue",Arial,sans-serif;
         font-weight: 700; font-size: clamp(22px, 4.2vw, 52px); line-height: 1.3;
         letter-spacing: -0.01em; opacity: 0.4; transform: scale(0.98); transform-origin: center;
-        transition: opacity 0.45s ease, transform 0.45s ease; margin: 0.2em 0; }
+        transition: opacity 0.45s ease, transform 0.45s ease; margin: 0.2em 0;
+        will-change: transform, filter; }
       .am-line.past { opacity: 0.5; }
       .am-line.active { opacity: 1; font-weight: 800; transform: scale(1.05); }
       /* Per-word karaoke wipe: a hard charcoal→gray stop at --fill, clipped to glyphs. */
@@ -142,6 +143,10 @@
           <label class="am-switch"><input id="apple-toggle" type="checkbox" /><span class="am-track"></span></label>
         </div>
         <div class="settings-row">
+          <span class="settings-label">On-device AI</span>
+          <label class="am-switch"><input id="ai-toggle" type="checkbox" /><span class="am-track"></span></label>
+        </div>
+        <div class="settings-row">
           <span class="settings-label">Font</span>
           <span id="font-name">Montserrat</span>
         </div>
@@ -181,6 +186,7 @@
       const amLyrics = document.getElementById("am-lyrics");
       const amInner = document.getElementById("am-lyrics-inner");
       const appleToggle = document.getElementById("apple-toggle");
+      const aiToggle = document.getElementById("ai-toggle");
 
       /* ── § 2  CONSTANTS ──────────────────────────────────────────────── */
       // Mood-themed type families (static TTFs opentype.js can parse).
@@ -922,6 +928,94 @@
         gGenre = name || null;
         gGenreAnim = (name && GENRE_ANIM[name]) || GENRE_ANIM.Default;
       }
+
+      /* ── §genre-ai — on-device tags→genre (DeBERTa-v3-XSmall), Settings-gated ──
+       * When "On-device AI" is ON, a Web Worker zero-shot-classifies the track's
+       * iTunes/Last.fm GENRE TAGS over the 50 canonical genres; resolveFinalGenre()
+       * COMBINES that with the alias-matched tag genre (a confidence-weighted prior)
+       * for a higher-accuracy pick. Feeding the short tag strings (not the lyrics)
+       * keeps the NLI premise tiny, so each of the 50 passes is fast. This is also
+       * exactly the original genre-map DeBERTa seam: resolve subgenre tags the
+       * deterministic alias map missed. OFF = alias tags only, as before. */
+      let aiEnabled = false;
+      let aiWorker = null;
+      let aiTagResult = null; // { genre, matchSource } from genre-update, current track
+      let aiTags = null;      // raw provider tags for the current track (AI input)
+      let aiScores = null;    // { genre: prob } from the worker
+      let aiScoresKey = "";   // track key the scores belong to (guards stale results)
+      // Prior added to the tag genre's AI score, by how confident the tag match was.
+      // The "fallback" default (Pop) carries no signal, so it gets zero weight.
+      const AI_TAG_BONUS = { alias: 0.5, deberta: 0.5, fallback: 0 };
+      const aiLabels = () => Object.keys(GENRE_ANIM).filter((g) => g !== "Default");
+
+      function ensureAiWorker() {
+        if (aiWorker) return aiWorker;
+        try {
+          aiWorker = new Worker("/ai-genre-worker.js", { type: "module" });
+          aiWorker.onmessage = (ev) => {
+            const m = ev.data || {};
+            if (m.type === "status") { console.log("[Genre AI] model " + m.state); return; }
+            if (m.type !== "result") return;
+            if (m.key !== curTrackKey) return; // a newer track is playing -> drop
+            if (m.error || !m.scores) { console.warn("[Genre AI] classify failed: " + (m.error || "no scores")); return; }
+            aiScores = m.scores; aiScoresKey = m.key;
+            const top = Object.entries(m.scores).sort((a, b) => b[1] - a[1]).slice(0, 3)
+              .map(([g, s]) => `${g} ${Math.round(s * 100)}%`).join(", ");
+            console.log("[Genre AI] tags -> " + top);
+            resolveFinalGenre();
+          };
+          aiWorker.onerror = (e) => console.warn("[Genre AI] worker error: " + ((e && e.message) || e));
+        } catch (e) {
+          console.warn("[Genre AI] worker unavailable: " + ((e && e.message) || e));
+          aiWorker = null;
+        }
+        return aiWorker;
+      }
+
+      // Send the current track's genre tags to the worker (once per track). Short
+      // input (a few tag words) -> fast 50-label zero-shot. No tags -> nothing to
+      // refine, so the alias tag genre stands on its own.
+      function classifyGenreWithAI(tags) {
+        if (!aiEnabled || gGenreOverride) return;
+        if (!Array.isArray(tags) || !tags.length) return;
+        if (aiScores && aiScoresKey === curTrackKey) return; // already classified this track
+        const w = ensureAiWorker();
+        if (!w) return;
+        w.postMessage({ type: "classify", key: curTrackKey, text: tags.join(", "), labels: aiLabels() });
+      }
+
+      // Decide the final genre from whatever signals exist, then drive the animation.
+      function resolveFinalGenre() {
+        if (gGenreOverride) return; // dev pin wins
+        const tagGenre = aiTagResult && aiTagResult.genre;
+        // AI off, scores not in yet, or scores belong to a previous track -> tags only.
+        if (!aiEnabled || !aiScores || aiScoresKey !== curTrackKey) {
+          if (tagGenre) setGenreAnim(tagGenre);
+          return;
+        }
+        const bonus = aiTagResult ? (AI_TAG_BONUS[aiTagResult.matchSource] ?? 0.3) : 0;
+        let best = null, bestScore = -Infinity;
+        for (const g in aiScores) {
+          const score = aiScores[g] + (g === tagGenre ? bonus : 0);
+          if (score > bestScore) { bestScore = score; best = g; }
+        }
+        if (best) {
+          setGenreAnim(best);
+          console.log(`[Genre] combined -> ${best} (tag:${tagGenre || "—"}/${(aiTagResult && aiTagResult.matchSource) || "—"})`);
+        } else if (tagGenre) {
+          setGenreAnim(tagGenre);
+        }
+      }
+
+      // Settings toggle. ON: ensure the worker + (re)classify the current track's
+      // tags. OFF: drop AI influence and re-resolve to the alias tag genre.
+      function setAiEnabled(on) {
+        aiEnabled = !!on;
+        try { localStorage.setItem("cotolyrics.aiGenre", aiEnabled ? "1" : "0"); } catch (_) {}
+        if (aiToggle) aiToggle.checked = aiEnabled;
+        if (aiEnabled) { ensureAiWorker(); classifyGenreWithAI(aiTags); }
+        resolveFinalGenre();
+      }
       // Apply the active genre primitive to ONE glyph `c` (front + shadow), layered
       // on the glyph's static baseX. `e` (0..1) is the letter's APPEARING progress —
       // the primitive bakes the entrance + idle blend off it. Returns an opacity
@@ -1493,13 +1587,26 @@
       let amActivePi = -1;  // last active phrase index (class-thrash guard)
       let amScrollY = 0;    // current eased translateY (px)
       let amSnap = true;    // snap (no ease) on the first frame after a (re)build
-      const AM_SCROLL_K = 6; // spring rate (1/s)
+      let amLineH = 56;     // cached representative line height (avoids per-frame layout reads)
+      const AM_SCROLL_K = 5.5; // spring rate (1/s) — gentle, no overshoot
+      // Depth-of-field blur: lines blur as they enter from the bottom, sharpen at
+      // the center, blur again toward the top (real Apple Music look). A line's
+      // signed distance from the viewport center is amScrollY + L.mid; blur ramps
+      // outside a crisp dead zone, capped. Tuned vs. viewport so it scales.
+      const AM_BLUR_MAX = 6;       // px hard cap on the furthest lines
+      const AM_BLUR_DEAD_FR = 0.55; // crisp half-window around center, in line-heights
+      // Reading glow: the line at center softly blooms, fading out within ~1.4 line
+      // heights, so the lyric you're on glows brightest and neighbours stay calm.
+      const AM_GLOW_MAX = 0.5;       // peak halo alpha at dead-center
+      const AM_GLOW_RADIUS = 28;     // px halo blur radius at center
+      const AM_GLOW_RANGE_FR = 1.4;  // how far the glow reaches, in line-heights
+      const AM_GLOW_RGB = "150,170,255"; // soft cool-white bloom (visible on the white theme)
 
       function buildAppleLyrics() {
         if (!amInner) return;
         amInner.textContent = "";
         amLines = []; amActivePi = -1; amSnap = true; amScrollY = 0;
-        amInner.style.transform = "translateY(0px)";
+        amInner.style.transform = "translate3d(0,0,0)";
         const oldPh = document.getElementById("am-placeholder"); // viewport-centered, sibling of amInner
         if (oldPh) oldPh.remove();
         if (!phrases.length) { // no synced lyrics -> centered title + ♪
@@ -1529,8 +1636,17 @@
           }
           if (!ws.length) line.textContent = phrase.fullText || " ";
           amInner.appendChild(line);
-          amLines.push({ el: line, words: wordEls });
+          amLines.push({ el: line, words: wordEls, mid: 0 });
         }
+        recomputeAmMids();
+      }
+
+      // Cache each line's center (offsetTop + height/2) so the per-frame blur pass
+      // never reads layout. Re-run after web fonts settle and on resize, since both
+      // reflow the list and shift every line's center.
+      function recomputeAmMids() {
+        for (const L of amLines) L.mid = L.el.offsetTop + L.el.offsetHeight / 2;
+        if (amLines.length) amLineH = amLines[0].el.offsetHeight || amLineH; // cache once; lines share a size
       }
 
       function updateAppleLyrics(t, dt) {
@@ -1562,10 +1678,33 @@
           if (cur !== w.el.classList.contains("cur")) w.el.classList.toggle("cur", cur);
         }
         // Spring-scroll so the active line's center sits at the viewport center.
-        const target = -(active.el.offsetTop + active.el.offsetHeight / 2);
+        // Frame-rate-independent exponential ease (no overshoot); translate3d keeps
+        // the whole list on its own GPU layer for jank-free scrolling.
+        const target = -(active.mid || (active.el.offsetTop + active.el.offsetHeight / 2));
         if (amSnap) { amScrollY = target; amSnap = false; }
         else amScrollY += (target - amScrollY) * (1 - Math.exp(-AM_SCROLL_K * dt));
-        amInner.style.transform = `translateY(${amScrollY.toFixed(1)}px)`;
+        amInner.style.transform = `translate3d(0, ${amScrollY.toFixed(2)}px, 0)`;
+        // Per-line depth-of-field + reading glow, both keyed off each line's signed
+        // distance from the viewport center (= amScrollY + L.mid). Uses the cached
+        // line height + mids, so NO layout is read here (no per-frame reflow → smooth).
+        const dead = amLineH * AM_BLUR_DEAD_FR;
+        const falloff = Math.max(1, window.innerHeight * 0.18);
+        const glowRange = Math.max(1, amLineH * AM_GLOW_RANGE_FR);
+        for (let i = 0; i < amLines.length; i++) {
+          const L = amLines[i];
+          const dist = Math.abs(amScrollY + L.mid);
+          // Blur: crisp within the dead zone, ramping out to AM_BLUR_MAX.
+          const px = Math.min(AM_BLUR_MAX, Math.max(0, (dist - dead) / falloff) * AM_BLUR_MAX);
+          const blur = px > 0.05 ? `blur(${px.toFixed(2)}px)` : "";
+          if (L._blur !== blur) { L.el.style.filter = blur; L._blur = blur; }
+          // Glow: peaks at center, eased (prox²) so only the line being read blooms.
+          const prox = Math.max(0, 1 - dist / glowRange);
+          const a = prox * prox * AM_GLOW_MAX;
+          const glow = a > 0.02
+            ? `0 0 ${(AM_GLOW_RADIUS * (0.55 + 0.45 * prox)).toFixed(0)}px rgba(${AM_GLOW_RGB},${a.toFixed(2)})`
+            : "";
+          if (L._glow !== glow) { L.el.style.textShadow = glow; L._glow = glow; }
+        }
       }
 
       // Toggle the whole mode. ON overrides + hides the canvas; OFF restores it.
@@ -1588,6 +1727,10 @@
       }
       // Rebuild the Apple list whenever phrases change (no-op unless mode is on).
       function syncAppleToPhrases() { if (appleMode) buildAppleLyrics(); }
+      // Web-font load and window resize both reflow the line list; refresh the
+      // cached centers (used by both the spring-scroll and the depth-of-field blur).
+      try { document.fonts.ready.then(() => { if (appleMode) recomputeAmMids(); }); } catch (_) {}
+      window.addEventListener("resize", () => { if (appleMode) recomputeAmMids(); });
 
       /* ── §15  ANIMATION LOOP (delta-time) ────────────────────────────── */
       let lastTickMs = performance.now();
@@ -2015,6 +2158,7 @@
           dspBpm = 0; dspBpmRaw = 0; liveTierCand = null; liveTierCandSince = 0; renderProfile = "B"; // reset the live tier to neutral until the new estimate settles
           Object.assign(camK, PROFILE_CAMERA.B); // start camera neutral; tween into the detected tier
           if (!gGenreOverride) setGenreAnim(null); // reset letter animation to neutral until the genre resolves
+          aiTagResult = null; aiTags = null; aiScores = null; aiScoresKey = ""; // drop the previous track's genre signals
           songTitleEl.textContent = (title || "—").toUpperCase();
           songArtistEl.textContent = artist || "—";
           phrases = []; trackLyricIntensity = 0;
@@ -2296,8 +2440,9 @@
         });
       }
 
-      // §genre — canonical genre resolved in main from Last.fm tags, pushed once
-      // per track. Sets the per-letter animation (unless a dev override is active).
+      // §genre — canonical genre resolved in main from iTunes/Last.fm tags, pushed
+      // once per track. Stored as the tag signal; resolveFinalGenre() applies it
+      // (alone, or combined with the on-device AI when that toggle is ON).
       let gGenreOverride = false;
       if (window.cotodama && typeof window.cotodama.onGenreUpdate === "function") {
         window.cotodama.onGenreUpdate((p) => {
@@ -2305,12 +2450,30 @@
             if (!p || !p.genre || gGenreOverride) return;
             // Apply only for the still-current track.
             if (p.title === curTrack.title && p.artist === curTrack.artist) {
-              setGenreAnim(p.genre);
-              console.log(`[Genre] ${p.genre} -> ${gGenreAnim.prim} entrance [${p.source}]`);
+              aiTagResult = { genre: p.genre, matchSource: p.matchSource || "alias" };
+              aiTags = Array.isArray(p.tags) ? p.tags : [];
+              console.log(`[Genre] tag -> ${p.genre} [${p.source}/${p.matchSource || "?"}] tags=${aiTags.join(", ") || "—"}`);
+              classifyGenreWithAI(aiTags); // refine with on-device AI (no-op unless the toggle is on)
+              resolveFinalGenre();
             }
           } catch (err) { console.error("[Genre IPC error]", err); }
         });
       }
+
+      // On-device AI toggle — restore the saved preference (kicks off the model
+      // download + classify when ON), then wire changes. Placed here so the
+      // genre state above is initialized before any restore call runs.
+      if (aiToggle) {
+        aiToggle.addEventListener("change", () => setAiEnabled(aiToggle.checked));
+        try { if (localStorage.getItem("cotolyrics.aiGenre") === "1") setAiEnabled(true); } catch (_) {}
+      }
+      // DEV — preview the tag classifier without a live track: testAiGenre("trap, hip hop")
+      // logs the worker's per-genre scores. Forces the AI path on for the call.
+      window.testAiGenre = (tags) => {
+        const w = ensureAiWorker(); if (!w) return;
+        const text = Array.isArray(tags) ? tags.join(", ") : String(tags || "");
+        w.postMessage({ type: "classify", key: curTrackKey, text, labels: aiLabels() });
+      };
 
       // DEV OVERRIDE — force a genre for reviewing the 50 animations without a live
       // Last.fm hit: append ?genre=Metal (exact canonical name) to the URL, or call
